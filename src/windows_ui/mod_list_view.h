@@ -21,5 +21,7 @@ void AddModListColumns(HWND modList);
 void PopulateModListView(HWND modList, const LauncherConfig& config, std::vector<InstalledModView>* modViews);
 bool IsModViewConflicting(const LauncherConfig& config, const std::vector<ModConflictEntry>& conflicts, const InstalledModView& view);
 std::string GetModConflictSummary(const LauncherConfig& config, const std::vector<ModConflictEntry>& conflicts, const InstalledModView& view);
+std::string BuildModRelationshipStatus(const LauncherConfig& config, const InstalledModView& view);
+std::string BuildModRelationshipDetails(const LauncherConfig& config, const InstalledModView& view);
 InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const InstalledModView& view);
 }

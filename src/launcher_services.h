@@ -24,6 +24,7 @@ struct InstallModOptions
     std::vector<std::string> selectedDllNames;
     std::vector<std::string> overwriteDllNames;
     std::vector<std::string> skipDllNames;
+    std::vector<std::string> keepSharedDllNames;
 };
 
 struct InstallModResult
@@ -51,15 +52,21 @@ struct PackageDllInstallHint
     uint32_t delayMs = 0;
     bool fromPackageLoadOrder = false;
     bool presentInPackage = false;
+    bool sharedDependency = false;
     bool installedInConfig = false;
     bool targetFileExists = false;
 };
 
 std::string GetDllModDisplayName(const ModEntry& mod);
+std::string GetSharedDllDisplayName(const LauncherConfig& config, const std::string& dllName);
 std::string GetResourceModDisplayName(const ResourceModEntry& mod);
+ModType GetDllModType(const LauncherConfig& config, const std::string& dllName);
+std::string GetDllPackageName(const LauncherConfig& config, const std::string& dllName);
 std::string GetModDisplayName(const LauncherConfig& config, const ModMatch& match);
 std::string GetModManifestOwner(const LauncherConfig& config, const ModMatch& match);
 std::string GetModIdentity(const LauncherConfig& config, const ModMatch& match);
+bool IsSharedDll(const LauncherConfig& config, const std::string& dllName);
+std::string GetSharedDllManifestOwner(const LauncherConfig& config, const std::string& dllName);
 std::vector<ModMatch> FindInstalledMods(const LauncherConfig& config, const std::string& query);
 bool FindSingleInstalledMod(const LauncherConfig& config, const std::string& query, ModMatch* match, std::string* error);
 bool RenameInstalledMod(LauncherConfig* config, const ModMatch& match, const std::string& newName, std::string* error);

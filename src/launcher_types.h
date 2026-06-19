@@ -19,6 +19,8 @@ enum class InjectionStage
 enum class ModType
 {
     Dll,
+    DllDependency,
+    SharedDll,
     Resource
 };
 
@@ -47,6 +49,26 @@ struct ResourceModEntry
     uint32_t delayMs = 0;
 };
 
+struct SharedDllEntry
+{
+    std::string dllName;
+    std::string name;
+    std::string manifestOwner;
+    std::vector<std::string> requiredBy;
+    InjectionStage stage = InjectionStage::Resume;
+    uint32_t delayMs = 0;
+};
+
+struct InstalledPackageEntry
+{
+    std::string id;
+    std::string name;
+    std::string manifestOwner;
+    std::string primaryDll;
+    std::vector<std::string> dlls;
+    std::vector<std::string> sharedDlls;
+};
+
 struct InstalledModView
 {
     ModType type = ModType::Dll;
@@ -60,6 +82,8 @@ struct LauncherConfig
     StageWait engineWait = {"Engine.dll", kDefaultStageTimeoutMs};
     StageWait uiWait = {"UI.dll", kDefaultStageTimeoutMs};
     std::vector<ModEntry> mods;
+    std::vector<InstalledPackageEntry> packages;
+    std::vector<SharedDllEntry> sharedDlls;
     std::vector<ResourceModEntry> resourceMods;
 };
 

@@ -47,6 +47,148 @@ std::string MakeUniqueResourceModId(const LauncherConfig& config, const std::str
     }
 }
 
+std::string MakeUniquePackageId(const LauncherConfig& config, const std::string& gameRoot, const std::string& name)
+{
+    std::string base = SanitizeManifestOwner(name);
+    if (base.empty()) {
+        base = "package";
+    }
+    std::string candidate = base;
+    int suffix = 2;
+    for (;;) {
+        bool unique = true;
+        for (const InstalledPackageEntry& package : config.packages) {
+            if (EqualsNoCase(package.id, candidate)) {
+                unique = false;
+                break;
+            }
+        }
+        if (unique && FileExists(GetInstallManifestPath(gameRoot, candidate).c_str())) {
+            unique = false;
+        }
+        if (unique) {
+            return candidate;
+        }
+        candidate = base + "_" + Uint32ToString(static_cast<uint32_t>(suffix));
+        ++suffix;
+    }
+}
+
+const InstalledPackageEntry* FindPackageByDll(const LauncherConfig& config, const std::string& dllName)
+{
+    for (const InstalledPackageEntry& package : config.packages) {
+        for (const std::string& packageDll : package.dlls) {
+            if (EqualsNoCase(packageDll, dllName)) {
+                return &package;
+            }
+        }
+    }
+    return nullptr;
+}
+
+InstalledPackageEntry* FindPackageByDll(LauncherConfig* config, const std::string& dllName)
+{
+    if (!config) {
+        return nullptr;
+    }
+    for (InstalledPackageEntry& package : config->packages) {
+        for (const std::string& packageDll : package.dlls) {
+            if (EqualsNoCase(packageDll, dllName)) {
+                return &package;
+            }
+        }
+    }
+    return nullptr;
+}
+
+std::string GetPackageDisplayName(const InstalledPackageEntry& package)
+{
+    return package.name.empty() ? package.id : package.name;
+}
+
+SharedDllEntry* FindSharedDll(LauncherConfig* config, const std::string& dllName);
+const SharedDllEntry* FindSharedDll(const LauncherConfig& config, const std::string& dllName);
+
+std::string GetDllManifestOwner(const LauncherConfig& config, const std::string& dllName)
+{
+    if (const SharedDllEntry* sharedDll = FindSharedDll(config, dllName)) {
+        return sharedDll->manifestOwner.empty() ? "shared-" + sharedDll->dllName : sharedDll->manifestOwner;
+    }
+    if (const InstalledPackageEntry* package = FindPackageByDll(config, dllName)) {
+        return package->manifestOwner.empty() ? package->id : package->manifestOwner;
+    }
+    return dllName;
+}
+
+std::string GetDllOwnerDisplayName(const LauncherConfig& config, const ModEntry& mod)
+{
+    if (const SharedDllEntry* sharedDll = FindSharedDll(config, mod.dllName)) {
+        return sharedDll->name.empty() ? sharedDll->dllName : sharedDll->name;
+    }
+    if (const InstalledPackageEntry* package = FindPackageByDll(config, mod.dllName)) {
+        return GetPackageDisplayName(*package);
+    }
+    return mod.name.empty() ? mod.dllName : mod.name;
+}
+
+bool IsSharedDllName(const LauncherConfig& config, const std::string& dllName)
+{
+    for (const SharedDllEntry& sharedDll : config.sharedDlls) {
+        if (EqualsNoCase(sharedDll.dllName, dllName)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+SharedDllEntry* FindSharedDll(LauncherConfig* config, const std::string& dllName)
+{
+    if (!config) {
+        return nullptr;
+    }
+    for (SharedDllEntry& sharedDll : config->sharedDlls) {
+        if (EqualsNoCase(sharedDll.dllName, dllName)) {
+            return &sharedDll;
+        }
+    }
+    return nullptr;
+}
+
+const SharedDllEntry* FindSharedDll(const LauncherConfig& config, const std::string& dllName)
+{
+    for (const SharedDllEntry& sharedDll : config.sharedDlls) {
+        if (EqualsNoCase(sharedDll.dllName, dllName)) {
+            return &sharedDll;
+        }
+    }
+    return nullptr;
+}
+
+void AddUniqueNoCase(std::vector<std::string>* values, const std::string& value)
+{
+    if (!values || Trim(value).empty()) {
+        return;
+    }
+    for (const std::string& existing : *values) {
+        if (EqualsNoCase(existing, value)) {
+            return;
+        }
+    }
+    values->push_back(value);
+}
+
+void RemoveValueNoCase(std::vector<std::string>* values, const std::string& value)
+{
+    if (!values) {
+        return;
+    }
+    values->erase(
+        std::remove_if(values->begin(), values->end(), [&value](const std::string& existing) {
+            return EqualsNoCase(existing, value);
+        }),
+        values->end());
+}
+
 void AppendMatch(std::vector<ModMatch>* matches, ModType type, std::size_t index)
 {
     for (const ModMatch& match : *matches) {
@@ -63,14 +205,27 @@ struct ManifestOwnerInfo
     std::string modName;
 };
 
+void AddManifestOwner(std::vector<ManifestOwnerInfo>* owners, const std::string& owner, const std::string& modName)
+{
+    if (!owners || owner.empty()) {
+        return;
+    }
+    for (const ManifestOwnerInfo& existing : *owners) {
+        if (EqualsNoCase(existing.owner, owner)) {
+            return;
+        }
+    }
+    owners->push_back({owner, modName});
+}
+
 std::vector<ManifestOwnerInfo> GetManifestOwners(const LauncherConfig& config)
 {
     std::vector<ManifestOwnerInfo> owners;
     for (const ModEntry& mod : config.mods) {
-        owners.push_back({mod.dllName, GetDllModDisplayName(mod)});
+        AddManifestOwner(&owners, GetDllManifestOwner(config, mod.dllName), GetDllOwnerDisplayName(config, mod));
     }
     for (const ResourceModEntry& mod : config.resourceMods) {
-        owners.push_back({mod.manifestOwner.empty() ? mod.id : mod.manifestOwner, GetResourceModDisplayName(mod)});
+        AddManifestOwner(&owners, mod.manifestOwner.empty() ? mod.id : mod.manifestOwner, GetResourceModDisplayName(mod));
     }
     return owners;
 }
@@ -100,14 +255,57 @@ std::string GetDllModDisplayName(const ModEntry& mod)
     return mod.name.empty() ? mod.dllName : mod.name;
 }
 
+bool IsSharedDll(const LauncherConfig& config, const std::string& dllName)
+{
+    return IsSharedDllName(config, dllName);
+}
+
+std::string GetSharedDllDisplayName(const LauncherConfig& config, const std::string& dllName)
+{
+    if (const SharedDllEntry* sharedDll = FindSharedDll(config, dllName)) {
+        return sharedDll->name.empty() ? sharedDll->dllName : sharedDll->name;
+    }
+    return dllName;
+}
+
+std::string GetSharedDllManifestOwner(const LauncherConfig& config, const std::string& dllName)
+{
+    if (const SharedDllEntry* sharedDll = FindSharedDll(config, dllName)) {
+        return sharedDll->manifestOwner.empty() ? "shared-" + sharedDll->dllName : sharedDll->manifestOwner;
+    }
+    return dllName;
+}
+
 std::string GetResourceModDisplayName(const ResourceModEntry& mod)
 {
     return mod.name.empty() ? mod.id : mod.name;
 }
 
+ModType GetDllModType(const LauncherConfig& config, const std::string& dllName)
+{
+    if (IsSharedDllName(config, dllName)) {
+        return ModType::SharedDll;
+    }
+    if (const InstalledPackageEntry* package = FindPackageByDll(config, dllName)) {
+        return EqualsNoCase(package->primaryDll, dllName) ? ModType::Dll : ModType::DllDependency;
+    }
+    return ModType::Dll;
+}
+
+std::string GetDllPackageName(const LauncherConfig& config, const std::string& dllName)
+{
+    if (const InstalledPackageEntry* package = FindPackageByDll(config, dllName)) {
+        return GetPackageDisplayName(*package);
+    }
+    return std::string();
+}
+
 std::string GetModDisplayName(const LauncherConfig& config, const ModMatch& match)
 {
-    if (match.type == ModType::Dll) {
+    if (match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll) {
+        if (match.type == ModType::SharedDll) {
+            return GetSharedDllDisplayName(config, config.mods[match.index].dllName);
+        }
         return GetDllModDisplayName(config.mods[match.index]);
     }
     return GetResourceModDisplayName(config.resourceMods[match.index]);
@@ -115,8 +313,8 @@ std::string GetModDisplayName(const LauncherConfig& config, const ModMatch& matc
 
 std::string GetModManifestOwner(const LauncherConfig& config, const ModMatch& match)
 {
-    if (match.type == ModType::Dll) {
-        return config.mods[match.index].dllName;
+    if (match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll) {
+        return GetDllManifestOwner(config, config.mods[match.index].dllName);
     }
     const ResourceModEntry& mod = config.resourceMods[match.index];
     return mod.manifestOwner.empty() ? mod.id : mod.manifestOwner;
@@ -124,7 +322,7 @@ std::string GetModManifestOwner(const LauncherConfig& config, const ModMatch& ma
 
 std::string GetModIdentity(const LauncherConfig& config, const ModMatch& match)
 {
-    if (match.type == ModType::Dll) {
+    if (match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll) {
         return config.mods[match.index].dllName;
     }
     return config.resourceMods[match.index].id;
@@ -136,8 +334,10 @@ std::vector<ModMatch> FindInstalledMods(const LauncherConfig& config, const std:
     const std::string trimmedQuery = Trim(query);
     for (std::size_t i = 0; i < config.mods.size(); ++i) {
         const ModEntry& mod = config.mods[i];
-        if (EqualsNoCase(mod.dllName, trimmedQuery) || EqualsNoCase(GetDllModDisplayName(mod), trimmedQuery)) {
-            AppendMatch(&matches, ModType::Dll, i);
+        const ModType type = GetDllModType(config, mod.dllName);
+        const std::string displayName = type == ModType::SharedDll ? GetSharedDllDisplayName(config, mod.dllName) : GetDllModDisplayName(mod);
+        if (EqualsNoCase(mod.dllName, trimmedQuery) || EqualsNoCase(displayName, trimmedQuery)) {
+            AppendMatch(&matches, type, i);
         }
     }
 
@@ -170,7 +370,7 @@ bool FindSingleInstalledMod(const LauncherConfig& config, const std::string& que
                 *error += "\n  ";
                 *error += GetModDisplayName(config, candidate);
                 *error += " (";
-                *error += candidate.type == ModType::Dll ? "DLL Mod, " : "Resource Mod, ";
+                *error += candidate.type == ModType::SharedDll ? "DLL Mod Shared Dependency, " : (candidate.type == ModType::DllDependency ? "DLL Mod Dependency, " : (candidate.type == ModType::Dll ? "DLL Mod, " : "Resource Mod, "));
                 *error += GetModIdentity(config, candidate);
                 *error += ")";
             }
@@ -193,8 +393,14 @@ bool RenameInstalledMod(LauncherConfig* config, const ModMatch& match, const std
         return false;
     }
 
-    if (match.type == ModType::Dll) {
+    if (match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll) {
         config->mods[match.index].name = Trim(newName);
+        if (match.type == ModType::SharedDll) {
+            SharedDllEntry* sharedDll = FindSharedDll(config, config->mods[match.index].dllName);
+            if (sharedDll) {
+                sharedDll->name = Trim(newName);
+            }
+        }
     }
     else {
         config->resourceMods[match.index].name = Trim(newName);
@@ -214,11 +420,18 @@ bool SetInstalledModStage(LauncherConfig* config, const ModMatch& match, Injecti
         return false;
     }
 
-    if (match.type == ModType::Dll) {
+    if (match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll) {
         ModEntry& mod = config->mods[match.index];
         mod.stage = stage;
         mod.delayMs = delayMs;
         mod.spec = SerializeModEntry(mod);
+        if (match.type == ModType::SharedDll) {
+            SharedDllEntry* sharedDll = FindSharedDll(config, mod.dllName);
+            if (sharedDll) {
+                sharedDll->stage = stage;
+                sharedDll->delayMs = delayMs;
+            }
+        }
     }
     else {
         ResourceModEntry& mod = config->resourceMods[match.index];
@@ -234,7 +447,7 @@ bool MoveInstalledMod(LauncherConfig* config, const ModMatch& match, int directi
         return false;
     }
 
-    if (match.type == ModType::Dll) {
+    if (match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll) {
         const int target = static_cast<int>(match.index) + direction;
         if (target < 0 || target >= static_cast<int>(config->mods.size())) {
             if (error) {
@@ -299,6 +512,20 @@ std::vector<ModEntry> ReadPackageLoadOrderHints(const std::string& packageRoot, 
     return hints;
 }
 
+std::vector<std::string> ReadPackageSharedDllNames(const std::string& packageRoot)
+{
+    std::vector<std::string> names;
+    std::string packageIniPath;
+    if (!FindPackageFileByRelativePath(packageRoot, JoinPath(JoinPath("bin", "Final"), "GameModLauncher.ini"), &packageIniPath)) {
+        return names;
+    }
+
+    for (const std::string& dllName : SplitLoadOrderList(ReadIniStringFromFile("SharedDlls", "Names", "", packageIniPath))) {
+        AddUniqueNoCase(&names, Trim(dllName));
+    }
+    return names;
+}
+
 std::string GetDllRelativePath(const std::string& dllName)
 {
     return JoinPath(JoinPath(JoinPath("bin", "Final"), "mods"), dllName);
@@ -319,6 +546,7 @@ PackageDllInstallHint MakePackageDllHint(
     PackageDllInstallHint hint;
     hint.dllName = dllName;
     hint.presentInPackage = presentInPackage;
+    hint.sharedDependency = IsSharedDllName(config, dllName);
     hint.fromPackageLoadOrder = packageHint != nullptr;
     hint.stage = packageHint ? packageHint->stage : InjectionStage::Resume;
     hint.delayMs = packageHint ? packageHint->delayMs : 0;
@@ -351,6 +579,87 @@ ModEntry MakeModEntryFromHint(
     entry.delayMs = hint.delayMs;
     entry.spec = SerializeModEntry(entry);
     return entry;
+}
+
+std::vector<PackageFile> FilterPackageFiles(const std::vector<PackageFile>& files, const std::vector<std::string>& wantedRelativePaths)
+{
+    std::vector<PackageFile> filtered;
+    for (const PackageFile& file : files) {
+        if (ContainsNoCase(wantedRelativePaths, file.relativePath)) {
+            filtered.push_back(file);
+        }
+    }
+    return filtered;
+}
+
+std::vector<std::string> GetSharedDllOwnedRelativePaths(const std::string& dllName)
+{
+    std::vector<std::string> paths;
+    paths.push_back(GetDllRelativePath(dllName));
+    paths.push_back(GetDllIniRelativePath(dllName));
+    return paths;
+}
+
+void UpsertSharedDllEntry(
+    LauncherConfig* config,
+    const PackageDllInstallHint& hint,
+    const std::string& requiredBy)
+{
+    if (!config) {
+        return;
+    }
+
+    SharedDllEntry* sharedDll = FindSharedDll(config, hint.dllName);
+    if (!sharedDll) {
+        SharedDllEntry entry;
+        entry.dllName = hint.dllName;
+        entry.name = hint.displayName.empty() ? hint.dllName : hint.displayName;
+        entry.manifestOwner = "shared-" + hint.dllName;
+        entry.stage = hint.stage;
+        entry.delayMs = hint.delayMs;
+        config->sharedDlls.push_back(entry);
+        sharedDll = &config->sharedDlls.back();
+    }
+
+    if (!hint.displayName.empty() && sharedDll->name.empty()) {
+        sharedDll->name = hint.displayName;
+    }
+    sharedDll->stage = hint.stage;
+    sharedDll->delayMs = hint.delayMs;
+    AddUniqueNoCase(&sharedDll->requiredBy, requiredBy);
+}
+
+bool InstallSharedDllFiles(
+    const LauncherConfig& config,
+    const std::vector<PackageFile>& files,
+    const std::string& gameRoot,
+    const PackageDllInstallHint& hint,
+    const InstallModOptions& options,
+    std::string* error)
+{
+    if (!hint.presentInPackage || ContainsNoCase(options.keepSharedDllNames, hint.dllName)) {
+        return true;
+    }
+
+    const bool overwrite = ContainsNoCase(options.overwriteDllNames, hint.dllName);
+    const bool skip = ContainsNoCase(options.skipDllNames, hint.dllName);
+    if (hint.targetFileExists && !overwrite && !skip) {
+        if (error) {
+            *error = "Shared DLL already exists. Choose overwrite or keep/skip for: " + hint.dllName;
+        }
+        return false;
+    }
+    if (skip) {
+        return true;
+    }
+
+    PackageInstallResult ignored;
+    const std::vector<PackageFile> sharedFiles = FilterPackageFiles(files, GetSharedDllOwnedRelativePaths(hint.dllName));
+    if (sharedFiles.empty()) {
+        return true;
+    }
+    const std::string owner = IsSharedDllName(config, hint.dllName) ? GetSharedDllManifestOwner(config, hint.dllName) : "shared-" + hint.dllName;
+    return InstallModPackageFiles(sharedFiles, gameRoot, owner, &ignored, error);
 }
 
 bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& options, InstallModResult* result, std::string* error)
@@ -427,7 +736,8 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
     const std::string displayName = Trim(options.name).empty()
         ? (isDllMod ? dllName : SanitizeManifestOwner(FileNamePart(options.packageRoot)))
         : Trim(options.name);
-    const std::string manifestOwner = isDllMod ? dllName : MakeUniqueResourceModId(*config, gameRoot, displayName);
+    const std::string packageId = isDllMod ? MakeUniquePackageId(*config, gameRoot, displayName) : std::string();
+    const std::string manifestOwner = isDllMod ? packageId : MakeUniqueResourceModId(*config, gameRoot, displayName);
 
     std::vector<std::string> selectedDllNames;
     std::vector<std::string> skippedRelativePaths;
@@ -449,6 +759,15 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
 
         if (!ContainsNoCase(selectedDllNames, dllName)) {
             selectedDllNames.push_back(dllName);
+        }
+
+        for (const PackageDllInstallHint& hint : dllHints) {
+            if (EqualsNoCase(hint.dllName, dllName) && hint.sharedDependency) {
+                if (error) {
+                    *error = "Shared dependency cannot be selected as the primary DLL: " + dllName;
+                }
+                return false;
+            }
         }
 
         std::vector<std::string> orderedSelectedDllNames;
@@ -480,20 +799,36 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
                 return false;
             }
 
+            if (!hint->sharedDependency && IsSharedDllName(*config, selectedDllName)) {
+                if (error) {
+                    *error = "Cannot install a normal DLL mod over an installed shared dependency: " + selectedDllName;
+                }
+                return false;
+            }
+            if (!hint->sharedDependency) {
+                if (const InstalledPackageEntry* existingPackage = FindPackageByDll(*config, selectedDllName)) {
+                    if (error) {
+                        *error = "DLL is already installed as part of package " + GetPackageDisplayName(*existingPackage) + ": " + selectedDllName;
+                    }
+                    return false;
+                }
+            }
+
             if (hint->presentInPackage && hint->targetFileExists) {
                 const bool overwrite = ContainsNoCase(options.overwriteDllNames, selectedDllName);
                 const bool skip = ContainsNoCase(options.skipDllNames, selectedDllName);
+                const bool keepShared = hint->sharedDependency && ContainsNoCase(options.keepSharedDllNames, selectedDllName);
                 if (overwrite && skip) {
                     if (error) {
                         *error = "DLL has both overwrite and skip decisions: " + selectedDllName;
                     }
                     return false;
                 }
-                if (!overwrite && !skip) {
+                if (!overwrite && !skip && !keepShared) {
                     missingDecisionMessage += "\n  ";
                     missingDecisionMessage += selectedDllName;
                 }
-                if (skip) {
+                if (skip || keepShared) {
                     skippedRelativePaths.push_back(GetDllRelativePath(selectedDllName));
                     skippedRelativePaths.push_back(GetDllIniRelativePath(selectedDllName));
                 }
@@ -506,6 +841,30 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
                 *error += missingDecisionMessage;
             }
             return false;
+        }
+    }
+
+    std::vector<std::string> sharedOwnedRelativePaths;
+    std::vector<PackageDllInstallHint> selectedSharedHints;
+    if (isDllMod) {
+        for (const std::string& selectedDllName : selectedDllNames) {
+            for (const PackageDllInstallHint& hint : dllHints) {
+                if (EqualsNoCase(hint.dllName, selectedDllName) && hint.sharedDependency) {
+                    selectedSharedHints.push_back(hint);
+                    const std::vector<std::string> ownedPaths = GetSharedDllOwnedRelativePaths(hint.dllName);
+                    for (const std::string& ownedPath : ownedPaths) {
+                        AddUniqueNoCase(&sharedOwnedRelativePaths, ownedPath);
+                        AddUniqueNoCase(&skippedRelativePaths, ownedPath);
+                    }
+                    break;
+                }
+            }
+        }
+
+        for (const PackageDllInstallHint& sharedHint : selectedSharedHints) {
+            if (!InstallSharedDllFiles(*config, files, gameRoot, sharedHint, options, error)) {
+                return false;
+            }
         }
     }
 
@@ -533,6 +892,8 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
         }
 
         std::vector<ModEntry> selectedEntries;
+        std::vector<std::string> packageDlls;
+        std::vector<std::string> packageSharedDlls;
         for (const std::string& selectedDllName : selectedDllNames) {
             const PackageDllInstallHint* hint = nullptr;
             for (const PackageDllInstallHint& candidate : dllHints) {
@@ -547,10 +908,26 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
 
             const std::string entryName = EqualsNoCase(selectedDllName, dllName) ? displayName : hint->displayName;
             selectedEntries.push_back(MakeModEntryFromHint(*hint, entryName));
+            if (hint->sharedDependency) {
+                AddUniqueNoCase(&packageSharedDlls, selectedDllName);
+                UpsertSharedDllEntry(config, *hint, packageId);
+            }
+            else {
+                AddUniqueNoCase(&packageDlls, selectedDllName);
+            }
         }
 
         remainingMods.insert(remainingMods.begin() + static_cast<std::ptrdiff_t>(insertIndex), selectedEntries.begin(), selectedEntries.end());
         config->mods = remainingMods;
+
+        InstalledPackageEntry package;
+        package.id = packageId;
+        package.name = displayName.empty() ? packageId : displayName;
+        package.manifestOwner = manifestOwner;
+        package.primaryDll = dllName;
+        package.dlls = packageDlls;
+        package.sharedDlls = packageSharedDlls;
+        config->packages.push_back(package);
     }
     else {
         ResourceModEntry entry;
@@ -578,11 +955,30 @@ bool DeleteInstalledMod(LauncherConfig* config, const ModMatch& match, ModDelete
     }
 
     const std::string manifestOwner = GetModManifestOwner(*config, match);
-    const bool isDllMod = match.type == ModType::Dll;
+    const bool isDllMod = match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll;
+    const bool isPackageMember = match.type == ModType::Dll || match.type == ModType::DllDependency;
+    const InstalledPackageEntry* matchedPackage = isPackageMember ? FindPackageByDll(*config, config->mods[match.index].dllName) : nullptr;
+    const InstalledPackageEntry packageToDelete = matchedPackage ? *matchedPackage : InstalledPackageEntry();
+    if (match.type == ModType::SharedDll) {
+        const ModEntry& mod = config->mods[match.index];
+        const SharedDllEntry* sharedDll = FindSharedDll(*config, mod.dllName);
+        if (sharedDll && !sharedDll->requiredBy.empty()) {
+            if (error) {
+                *error = "Cannot delete shared dependency " + mod.dllName + " because it is required by:";
+                for (const std::string& requiredBy : sharedDll->requiredBy) {
+                    *error += "\n  ";
+                    *error += requiredBy;
+                }
+            }
+            return false;
+        }
+    }
+
     std::vector<std::string> protectedRelativePaths;
     if (isDllMod) {
         for (std::size_t i = 0; i < config->mods.size(); ++i) {
-            if (i == match.index) {
+            const bool packageMemberToDelete = matchedPackage && ContainsNoCase(packageToDelete.dlls, config->mods[i].dllName);
+            if (i == match.index || packageMemberToDelete) {
                 continue;
             }
             protectedRelativePaths.push_back(GetDllRelativePath(config->mods[i].dllName));
@@ -594,8 +990,37 @@ bool DeleteInstalledMod(LauncherConfig* config, const ModMatch& match, ModDelete
         return false;
     }
 
-    if (isDllMod) {
-        config->mods.erase(config->mods.begin() + static_cast<std::ptrdiff_t>(match.index));
+    if (match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll) {
+        const std::string deletedDllName = config->mods[match.index].dllName;
+        if (match.type == ModType::SharedDll) {
+            config->mods.erase(config->mods.begin() + static_cast<std::ptrdiff_t>(match.index));
+            config->sharedDlls.erase(
+                std::remove_if(config->sharedDlls.begin(), config->sharedDlls.end(), [&deletedDllName](const SharedDllEntry& sharedDll) {
+                    return EqualsNoCase(sharedDll.dllName, deletedDllName);
+                }),
+                config->sharedDlls.end());
+        }
+        else if (matchedPackage) {
+            config->mods.erase(
+                std::remove_if(config->mods.begin(), config->mods.end(), [&packageToDelete](const ModEntry& mod) {
+                    return ContainsNoCase(packageToDelete.dlls, mod.dllName);
+                }),
+                config->mods.end());
+            config->packages.erase(
+                std::remove_if(config->packages.begin(), config->packages.end(), [&packageToDelete](const InstalledPackageEntry& package) {
+                    return EqualsNoCase(package.id, packageToDelete.id);
+                }),
+                config->packages.end());
+            for (SharedDllEntry& sharedDll : config->sharedDlls) {
+                RemoveValueNoCase(&sharedDll.requiredBy, packageToDelete.id);
+            }
+        }
+        else {
+            config->mods.erase(config->mods.begin() + static_cast<std::ptrdiff_t>(match.index));
+            for (SharedDllEntry& sharedDll : config->sharedDlls) {
+                RemoveValueNoCase(&sharedDll.requiredBy, deletedDllName);
+            }
+        }
     }
     else {
         config->resourceMods.erase(config->resourceMods.begin() + static_cast<std::ptrdiff_t>(match.index));
@@ -625,7 +1050,17 @@ std::vector<PackageDllInstallHint> GetPackageDllInstallHintsForGameRoot(
 
     const std::vector<std::string> packageDllNames = FindPackageDllNames(packageFiles);
     const std::vector<ModEntry> packageLoadOrder = ReadPackageLoadOrderHints(packageRoot, warnings);
+    const std::vector<std::string> packageSharedDllNames = ReadPackageSharedDllNames(packageRoot);
     std::vector<PackageDllInstallHint> hints;
+
+    for (const std::string& sharedDllName : packageSharedDllNames) {
+        const bool presentInPackage = ContainsNoCase(packageDllNames, sharedDllName);
+        const bool installed = FindDllMod(config, sharedDllName) != nullptr
+            || FileExists(JoinPath(gameRoot, GetDllRelativePath(sharedDllName)).c_str());
+        if (!presentInPackage && !installed && warnings) {
+            warnings->push_back("Package SharedDlls references missing DLL: " + sharedDllName);
+        }
+    }
 
     for (const ModEntry& packageEntry : packageLoadOrder) {
         const bool presentInPackage = ContainsNoCase(packageDllNames, packageEntry.dllName);
@@ -650,7 +1085,9 @@ std::vector<PackageDllInstallHint> GetPackageDllInstallHintsForGameRoot(
             }
         }
         if (!alreadyAdded) {
-            hints.push_back(MakePackageDllHint(config, gameRoot, packageEntry.dllName, &packageEntry, presentInPackage));
+            PackageDllInstallHint hint = MakePackageDllHint(config, gameRoot, packageEntry.dllName, &packageEntry, presentInPackage);
+            hint.sharedDependency = hint.sharedDependency || ContainsNoCase(packageSharedDllNames, packageEntry.dllName);
+            hints.push_back(hint);
         }
     }
 
@@ -663,7 +1100,9 @@ std::vector<PackageDllInstallHint> GetPackageDllInstallHintsForGameRoot(
             }
         }
         if (!alreadyAdded) {
-            hints.push_back(MakePackageDllHint(config, gameRoot, dllName, nullptr, true));
+            PackageDllInstallHint hint = MakePackageDllHint(config, gameRoot, dllName, nullptr, true);
+            hint.sharedDependency = hint.sharedDependency || ContainsNoCase(packageSharedDllNames, dllName);
+            hints.push_back(hint);
         }
     }
 
@@ -674,8 +1113,12 @@ std::vector<ManifestAuditEntry> GetVanillaFileAudit(const LauncherConfig& config
 {
     std::vector<ManifestAuditEntry> audit;
     const std::string gameRoot = GetDefaultGameRootDirectory();
+    std::set<std::string> seenOwners;
 
     auto appendOwner = [&](const std::string& owner, const std::string& modName) {
+        if (!seenOwners.insert(ToLower(owner)).second) {
+            return;
+        }
         std::vector<InstallManifestEntryInfo> entries;
         if (!ReadInstallManifestEntriesInfo(gameRoot, owner, &entries)) {
             return;
@@ -697,7 +1140,7 @@ std::vector<ManifestAuditEntry> GetVanillaFileAudit(const LauncherConfig& config
     };
 
     for (const ModEntry& mod : config.mods) {
-        appendOwner(mod.dllName, GetDllModDisplayName(mod));
+        appendOwner(GetDllManifestOwner(config, mod.dllName), GetDllOwnerDisplayName(config, mod));
     }
     for (const ResourceModEntry& mod : config.resourceMods) {
         appendOwner(mod.manifestOwner.empty() ? mod.id : mod.manifestOwner, GetResourceModDisplayName(mod));

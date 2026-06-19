@@ -21,6 +21,45 @@ Example:
 LoadOrder=OynonTools.dll@suspended, PGOG.dll@engine, PPMM.dll@ui+3000
 ```
 
+Shared DLL dependencies are still listed in `LoadOrder`, but their role is
+declared separately. This is for common hook/helper libraries that can be used by
+several mods and should not be deleted with one ordinary mod:
+
+```ini
+[SharedDlls]
+Names=OynonTools.dll
+
+[SharedDll:OynonTools.dll]
+Name=OynonTools
+Stage=suspended
+DelayMs=0
+Manifest=shared-OynonTools.dll
+RequiredBy=StaminaSystem.dll
+```
+
+Packages can include the same `[SharedDlls]` section in
+`bin\Final\GameModLauncher.ini`. The launcher then installs that DLL as
+`DLL Mod Shared Dependency`. Shared dependencies own their DLL and matching INI
+through a separate manifest, while package resources remain owned by the primary
+mod package.
+
+DLL packages installed through the launcher are tracked as a single component:
+
+```ini
+[Packages]
+Order=stamina-system
+
+[Package:stamina-system]
+Name=Stamina System
+Manifest=stamina-system
+PrimaryDll=StaminaSystem.dll
+Dlls=PPMM.dll, StaminaSystem.dll
+SharedDlls=OynonTools.dll
+```
+
+`Dlls` are ordinary package members and are deleted together with the package.
+`SharedDlls` stay installed and are only referenced by the package.
+
 Centralized logging is controlled from the same file:
 
 ```ini
@@ -95,8 +134,9 @@ data\Sounds\some_sound.wav
 Release folders may also contain helper files at the package root. The launcher
 ignores root-level docs/scripts/archives and bundled launcher files such as
 `bin\Final\GameModLauncher.exe`, `bin\Final\GameModLauncher.ini`,
-`bin\Final\banner.txt`, and `bin\Final\banner.bmp`; installable DLLs/resources
-still come from `bin\Final\mods` and `data`.
+`bin\Final\mods\.launcher\banner.txt`, `bin\Final\mods\.launcher\banner.bmp`,
+and `bin\Final\mods\.launcher\banner.png`; installable DLLs/resources still
+come from `bin\Final\mods` and `data`.
 
 If a UI package does not use game-root layout and contains only loose resource
 files, the launcher asks where to install it: `data` or one of the common
@@ -110,6 +150,10 @@ installed as `Resource Mod`. The install dialog suggests the mod name from the
 archive/folder name and lets you change it before installation.
 
 After install, DLL mods are added to `LoadOrder` with the default `resume` stage.
+DLLs listed in package `[SharedDlls]` are shown as `DLL Mod Shared Dependency`;
+they cannot be deleted while another mod lists them in `RequiredBy`.
+Other DLLs selected from the same package are shown as `DLL Mod Dependency` and
+are deleted together with the primary package.
 Resource mods are added to `[ResourceMods]` and are not injected at runtime.
 
 `Delete Mod` removes files created by that install and restores overwritten files

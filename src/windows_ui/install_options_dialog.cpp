@@ -223,7 +223,8 @@ private:
             LVITEMA item = {};
             item.mask = LVIF_TEXT | LVIF_STATE;
             item.iItem = static_cast<int>(i);
-            item.pszText = const_cast<char*>(hints_[i].dllName.c_str());
+            const std::string dllText = hints_[i].sharedDependency ? hints_[i].dllName + " [shared]" : hints_[i].dllName;
+            item.pszText = const_cast<char*>(dllText.c_str());
             item.stateMask = LVIS_STATEIMAGEMASK;
             item.state = INDEXTOSTATEIMAGEMASK(selected_[i] ? 2 : 1);
             ListView_InsertItem(list_, &item);
@@ -304,7 +305,7 @@ private:
             text = "Existing";
         }
         else if (hint.targetFileExists) {
-            text = overwrite_[static_cast<std::size_t>(index)] ? "Overwrite" : "Skip";
+            text = overwrite_[static_cast<std::size_t>(index)] ? "Overwrite" : (hint.sharedDependency ? "Keep existing" : "Skip");
         }
         SetSubItemText(index, 5, text);
     }

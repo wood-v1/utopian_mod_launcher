@@ -114,6 +114,55 @@ bool RunSelfTests()
     require(RenameInstalledMod(&loadedResourceConfig, renameMatch, "Renamed Resource Pack", &error), "rename resource service");
     require(loadedResourceConfig.resourceMods[0].name == "Renamed Resource Pack", "renamed resource name");
 
+    loadedResourceConfig.sharedDlls.clear();
+    SharedDllEntry sharedConfigEntry;
+    sharedConfigEntry.dllName = "OynonTools.dll";
+    sharedConfigEntry.name = "OynonTools";
+    sharedConfigEntry.manifestOwner = "shared-OynonTools.dll";
+    sharedConfigEntry.requiredBy.push_back("StaminaSystem.dll");
+    sharedConfigEntry.stage = InjectionStage::Suspended;
+    loadedResourceConfig.sharedDlls.push_back(sharedConfigEntry);
+    ModEntry sharedLoadOrderEntry;
+    require(ParseModEntry("OynonTools.dll@suspended", &sharedLoadOrderEntry), "parse shared dll loadorder");
+    sharedLoadOrderEntry.name = "OynonTools";
+    loadedResourceConfig.mods.insert(loadedResourceConfig.mods.begin(), sharedLoadOrderEntry);
+    require(SaveLauncherConfig(iniPath, loadedResourceConfig, &error), "save shared dll config");
+    LauncherConfig loadedSharedConfig;
+    require(LoadLauncherConfig(iniPath, &loadedSharedConfig, &error), "load shared dll config");
+    require(loadedSharedConfig.sharedDlls.size() == 1, "shared dll count");
+    require(IsSharedDll(loadedSharedConfig, "OynonTools.dll"), "shared dll role");
+    require(GetSharedDllManifestOwner(loadedSharedConfig, "OynonTools.dll") == "shared-OynonTools.dll", "shared dll manifest owner");
+    ModMatch sharedDeleteMatch{ModType::SharedDll, 0};
+    ModDeleteResult blockedDeleteResult;
+    require(!DeleteInstalledMod(&loadedSharedConfig, sharedDeleteMatch, &blockedDeleteResult, &error), "shared dll required-by blocks delete");
+
+    InstalledPackageEntry packageConfigEntry;
+    packageConfigEntry.id = "stamina-system";
+    packageConfigEntry.name = "Stamina System";
+    packageConfigEntry.manifestOwner = "stamina-system";
+    packageConfigEntry.primaryDll = "StaminaSystem.dll";
+    packageConfigEntry.dlls.push_back("PPMM.dll");
+    packageConfigEntry.dlls.push_back("StaminaSystem.dll");
+    packageConfigEntry.sharedDlls.push_back("OynonTools.dll");
+    loadedSharedConfig.packages.push_back(packageConfigEntry);
+    ModEntry ppmmPackageEntry;
+    require(ParseModEntry("PPMM.dll@engine", &ppmmPackageEntry), "parse package dependency");
+    loadedSharedConfig.mods.push_back(ppmmPackageEntry);
+    ModEntry staminaPackageEntry;
+    require(ParseModEntry("StaminaSystem.dll@ui+3000", &staminaPackageEntry), "parse package primary");
+    loadedSharedConfig.mods.push_back(staminaPackageEntry);
+    require(SaveLauncherConfig(iniPath, loadedSharedConfig, &error), "save package config");
+    LauncherConfig loadedPackageConfig;
+    require(LoadLauncherConfig(iniPath, &loadedPackageConfig, &error), "load package config");
+    require(loadedPackageConfig.packages.size() == 1, "package config count");
+    require(GetDllModType(loadedPackageConfig, "StaminaSystem.dll") == ModType::Dll, "package primary role");
+    require(GetDllModType(loadedPackageConfig, "PPMM.dll") == ModType::DllDependency, "package dependency role");
+    require(GetDllModType(loadedPackageConfig, "OynonTools.dll") == ModType::SharedDll, "package shared role");
+    ModMatch packagePrimaryMatch{ModType::Dll, 5};
+    ModMatch packageDependencyMatch{ModType::DllDependency, 4};
+    require(GetModManifestOwner(loadedPackageConfig, packagePrimaryMatch) == "stamina-system", "package primary manifest owner");
+    require(GetModManifestOwner(loadedPackageConfig, packageDependencyMatch) == "stamina-system", "package dependency manifest owner");
+
     std::vector<ModIniEntry> entries;
     const std::string modIniText = "[General]\r\nDebug=0\r\nName=test\r\n\r\n[Constants]\r\nSpeed=1.5\r\n";
     require(ParseModIniText(modIniText, &entries), "parse mod ini");
@@ -193,6 +242,7 @@ bool RunSelfTests()
     require(WriteFileText(JoinPath(JoinPath(JoinPath(JoinPath(hintPackageRoot, "bin"), "Final"), "mods"), "HintA.dll"), "a"), "write hint package a");
     require(WriteFileText(JoinPath(JoinPath(JoinPath(JoinPath(hintPackageRoot, "bin"), "Final"), "mods"), "HintB.dll"), "b"), "write hint package b");
     WriteIniStringToFile("Mods", "LoadOrder", "HintB.dll@engine+500, HintA.dll@suspended, MissingHint.dll@ui", JoinPath(JoinPath(JoinPath(hintPackageRoot, "bin"), "Final"), "GameModLauncher.ini"));
+    WriteIniStringToFile("SharedDlls", "Names", "HintA.dll", JoinPath(JoinPath(JoinPath(hintPackageRoot, "bin"), "Final"), "GameModLauncher.ini"));
     WriteIniStringToFile("Mod:HintB.dll", "Name", "Hint B", JoinPath(JoinPath(JoinPath(hintPackageRoot, "bin"), "Final"), "GameModLauncher.ini"));
     require(EnumeratePackageFiles(hintPackageRoot, &packageFiles, &error), "enumerate hint package");
     std::vector<std::string> hintWarnings;
@@ -201,6 +251,7 @@ bool RunSelfTests()
     require(!hintWarnings.empty(), "package loadorder reports missing dependency");
     require(hintEntries[0].dllName == "HintB.dll" && hintEntries[0].stage == InjectionStage::Engine && hintEntries[0].delayMs == 500, "package loadorder hint b");
     require(hintEntries[1].dllName == "HintA.dll" && hintEntries[1].stage == InjectionStage::Suspended, "package loadorder hint a");
+    require(hintEntries[1].sharedDependency, "package marks shared dependency");
     require(hintEntries[0].displayName == "Hint B", "package mod display name hint");
 
     const std::string skipGameRoot = JoinPath(testRoot, "skip_game");

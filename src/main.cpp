@@ -178,10 +178,15 @@ void PrintGradientBanner(const std::string& banner)
     }
 }
 
+std::string GetLauncherAssetDirectory()
+{
+    return uml::JoinPath(uml::JoinPath(uml::GetModuleDirectory(), "mods"), ".launcher");
+}
+
 void PrintUiConsoleBanner()
 {
     std::string banner;
-    const std::string bannerPath = uml::JoinPath(uml::GetModuleDirectory(), "banner.txt");
+    const std::string bannerPath = uml::JoinPath(GetLauncherAssetDirectory(), "banner.txt");
     if (uml::ReadFileText(bannerPath, &banner) && !banner.empty()) {
         ResizeConsoleToBanner(banner);
         PrintGradientBanner(banner);

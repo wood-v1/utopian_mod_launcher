@@ -443,7 +443,10 @@ bool IsIgnoredLauncherPackageFile(const std::string& relativePath)
     return _stricmp(normalized.c_str(), "bin\\Final\\GameModLauncher.exe") == 0
         || _stricmp(normalized.c_str(), "bin\\Final\\GameModLauncher.ini") == 0
         || _stricmp(normalized.c_str(), "bin\\Final\\banner.txt") == 0
-        || _stricmp(normalized.c_str(), "bin\\Final\\banner.bmp") == 0;
+        || _stricmp(normalized.c_str(), "bin\\Final\\banner.bmp") == 0
+        || _stricmp(normalized.c_str(), "bin\\Final\\mods\\.launcher\\banner.txt") == 0
+        || _stricmp(normalized.c_str(), "bin\\Final\\mods\\.launcher\\banner.bmp") == 0
+        || _stricmp(normalized.c_str(), "bin\\Final\\mods\\.launcher\\banner.png") == 0;
 }
 
 bool IsIgnoredPackageFile(const std::string& relativePath)

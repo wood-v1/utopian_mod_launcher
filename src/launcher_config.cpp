@@ -1,6 +1,7 @@
 #include "launcher_config.h"
 
 #include "load_order.h"
+#include "path_utils.h"
 #include "string_utils.h"
 
 #include <windows.h>
@@ -38,9 +39,58 @@ std::string SerializeResourceModOrder(const std::vector<ResourceModEntry>& mods)
     return value;
 }
 
+std::string SerializeSharedDllNames(const std::vector<SharedDllEntry>& sharedDlls)
+{
+    std::string value;
+    for (std::size_t i = 0; i < sharedDlls.size(); ++i) {
+        if (i != 0) {
+            value += ", ";
+        }
+        value += sharedDlls[i].dllName;
+    }
+    return value;
+}
+
+std::string SerializeStringList(const std::vector<std::string>& values)
+{
+    std::string value;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) {
+            value += ", ";
+        }
+        value += values[i];
+    }
+    return value;
+}
+
+std::string SerializePackageOrder(const std::vector<InstalledPackageEntry>& packages)
+{
+    std::string value;
+    for (std::size_t i = 0; i < packages.size(); ++i) {
+        if (i != 0) {
+            value += ", ";
+        }
+        value += packages[i].id;
+    }
+    return value;
+}
+
 std::vector<std::string> SplitResourceModOrder(const std::string& order)
 {
     return SplitLoadOrderList(order);
+}
+
+ModEntry* FindLoadedMod(std::vector<ModEntry>* mods, const std::string& dllName)
+{
+    if (!mods) {
+        return nullptr;
+    }
+    for (ModEntry& mod : *mods) {
+        if (_stricmp(mod.dllName.c_str(), dllName.c_str()) == 0) {
+            return &mod;
+        }
+    }
+    return nullptr;
 }
 }
 
@@ -85,6 +135,71 @@ bool LoadLauncherConfig(const std::string& iniPath, LauncherConfig* config, std:
         loaded.mods.push_back(entry);
     }
 
+    const std::string sharedDllNames = ReadIniStringFromFile("SharedDlls", "Names", "", iniPath);
+    for (const std::string& dllName : SplitLoadOrderList(sharedDllNames)) {
+        const std::string trimmedDllName = Trim(dllName);
+        if (trimmedDllName.empty()) {
+            continue;
+        }
+
+        const std::string section = "SharedDll:" + trimmedDllName;
+        SharedDllEntry entry;
+        entry.dllName = trimmedDllName;
+        entry.name = ReadIniStringFromFile(section.c_str(), "Name", trimmedDllName.c_str(), iniPath);
+        entry.manifestOwner = ReadIniStringFromFile(section.c_str(), "Manifest", ("shared-" + trimmedDllName).c_str(), iniPath);
+        entry.requiredBy = SplitLoadOrderList(ReadIniStringFromFile(section.c_str(), "RequiredBy", "", iniPath));
+
+        const std::string stageName = ReadIniStringFromFile(section.c_str(), "Stage", "resume", iniPath);
+        const std::string delayText = ReadIniStringFromFile(section.c_str(), "DelayMs", "0", iniPath);
+        uint32_t parsedDelay = 0;
+        if (!ParseInjectionStage(Trim(stageName), &entry.stage, &entry.delayMs)) {
+            entry.stage = InjectionStage::Resume;
+            entry.delayMs = 0;
+        }
+        if (ParseUint32(Trim(delayText), &parsedDelay)) {
+            entry.delayMs = parsedDelay;
+        }
+
+        ModEntry* loadOrderEntry = FindLoadedMod(&loaded.mods, trimmedDllName);
+        if (loadOrderEntry) {
+            entry.stage = loadOrderEntry->stage;
+            entry.delayMs = loadOrderEntry->delayMs;
+            if (loadOrderEntry->name.empty() || loadOrderEntry->name == trimmedDllName) {
+                loadOrderEntry->name = entry.name.empty() ? trimmedDllName : entry.name;
+            }
+        }
+        else {
+            ModEntry mod;
+            mod.dllName = trimmedDllName;
+            mod.dllPath = ResolveModsPath(trimmedDllName);
+            mod.name = entry.name.empty() ? trimmedDllName : entry.name;
+            mod.stage = entry.stage;
+            mod.delayMs = entry.delayMs;
+            mod.spec = SerializeModEntry(mod);
+            loaded.mods.push_back(mod);
+        }
+
+        loaded.sharedDlls.push_back(entry);
+    }
+
+    const std::string packageOrder = ReadIniStringFromFile("Packages", "Order", "", iniPath);
+    for (const std::string& id : SplitLoadOrderList(packageOrder)) {
+        const std::string trimmedId = Trim(id);
+        if (trimmedId.empty()) {
+            continue;
+        }
+
+        const std::string section = "Package:" + trimmedId;
+        InstalledPackageEntry entry;
+        entry.id = trimmedId;
+        entry.name = ReadIniStringFromFile(section.c_str(), "Name", trimmedId.c_str(), iniPath);
+        entry.manifestOwner = ReadIniStringFromFile(section.c_str(), "Manifest", trimmedId.c_str(), iniPath);
+        entry.primaryDll = ReadIniStringFromFile(section.c_str(), "PrimaryDll", "", iniPath);
+        entry.dlls = SplitLoadOrderList(ReadIniStringFromFile(section.c_str(), "Dlls", "", iniPath));
+        entry.sharedDlls = SplitLoadOrderList(ReadIniStringFromFile(section.c_str(), "SharedDlls", "", iniPath));
+        loaded.packages.push_back(entry);
+    }
+
     const std::string resourceOrder = ReadIniStringFromFile("ResourceMods", "Order", "", iniPath);
     for (const std::string& id : SplitResourceModOrder(resourceOrder)) {
         const std::string section = "ResourceMod:" + id;
@@ -124,11 +239,42 @@ bool SaveLauncherConfig(const std::string& iniPath, const LauncherConfig& config
     ok = ok && WriteIniStringToFile("Stages", "UiModule", config.uiWait.moduleName, iniPath);
     ok = ok && WriteIniStringToFile("Stages", "UiTimeoutMs", Uint32ToString(config.uiWait.timeoutMs), iniPath);
     ok = ok && WriteIniStringToFile("Mods", "LoadOrder", SerializeLoadOrder(config.mods), iniPath);
+    ok = ok && WriteIniStringToFile("Packages", "Order", SerializePackageOrder(config.packages), iniPath);
+    ok = ok && WriteIniStringToFile("SharedDlls", "Names", SerializeSharedDllNames(config.sharedDlls), iniPath);
     ok = ok && WriteIniStringToFile("ResourceMods", "Order", SerializeResourceModOrder(config.resourceMods), iniPath);
 
     for (const ModEntry& mod : config.mods) {
         const std::string section = "Mod:" + mod.dllName;
         ok = ok && WriteIniStringToFile(section.c_str(), "Name", mod.name.empty() ? mod.dllName : mod.name, iniPath);
+    }
+
+    for (const SharedDllEntry& sharedDll : config.sharedDlls) {
+        const std::string section = "SharedDll:" + sharedDll.dllName;
+        InjectionStage stage = sharedDll.stage;
+        uint32_t delayMs = sharedDll.delayMs;
+        std::string name = sharedDll.name.empty() ? sharedDll.dllName : sharedDll.name;
+        for (const ModEntry& mod : config.mods) {
+            if (_stricmp(mod.dllName.c_str(), sharedDll.dllName.c_str()) == 0) {
+                stage = mod.stage;
+                delayMs = mod.delayMs;
+                name = mod.name.empty() ? name : mod.name;
+                break;
+            }
+        }
+        ok = ok && WriteIniStringToFile(section.c_str(), "Name", name, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "Stage", GetStageName(stage), iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "DelayMs", Uint32ToString(delayMs), iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "Manifest", sharedDll.manifestOwner.empty() ? "shared-" + sharedDll.dllName : sharedDll.manifestOwner, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "RequiredBy", SerializeStringList(sharedDll.requiredBy), iniPath);
+    }
+
+    for (const InstalledPackageEntry& package : config.packages) {
+        const std::string section = "Package:" + package.id;
+        ok = ok && WriteIniStringToFile(section.c_str(), "Name", package.name.empty() ? package.id : package.name, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "Manifest", package.manifestOwner.empty() ? package.id : package.manifestOwner, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "PrimaryDll", package.primaryDll, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "Dlls", SerializeStringList(package.dlls), iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "SharedDlls", SerializeStringList(package.sharedDlls), iniPath);
     }
 
     for (const ResourceModEntry& mod : config.resourceMods) {

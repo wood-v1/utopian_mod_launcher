@@ -111,6 +111,12 @@ int RunHeadlessLaunch()
 
 const char* TypeName(ModType type)
 {
+    if (type == ModType::SharedDll) {
+        return "DLL Mod Shared Dependency";
+    }
+    if (type == ModType::DllDependency) {
+        return "DLL Mod Dependency";
+    }
     return type == ModType::Dll ? "DLL Mod" : "Resource Mod";
 }
 
@@ -161,6 +167,8 @@ int PrintUsage()
         "Install notes:\n"
         "  DLL packages may include bin\\Final\\GameModLauncher.ini.\n"
         "  Only [Mods] LoadOrder and [Mod:<dll>] Name are used as install hints.\n"
+        "  [SharedDlls] Names marks DLLs such as hook libraries as shared dependencies.\n"
+        "  Non-shared DLL dependencies are grouped into an installed package and deleted together.\n"
         "  If a selected DLL already exists, choose --overwrite-dll <dll> or --skip-dll <dll>.\n");
     return 0;
 }
@@ -175,15 +183,16 @@ int CommandList()
     std::printf("Order  Type          Stage      Delay  Name                          Identity        Manifest\n");
     for (std::size_t i = 0; i < config.mods.size(); ++i) {
         const ModEntry& mod = config.mods[i];
+        const ModType type = GetDllModType(config, mod.dllName);
         std::printf(
             "%-5lu  %-12s  %-9s  %-5lu  %-28s  %-14s  %s\n",
             static_cast<unsigned long>(i + 1),
-            "DLL Mod",
+            type == ModType::SharedDll ? "DLL Shared" : (type == ModType::DllDependency ? "DLL Dep" : "DLL Mod"),
             GetStageName(mod.stage),
             static_cast<unsigned long>(mod.delayMs),
-            GetDllModDisplayName(mod).c_str(),
+            (type == ModType::SharedDll ? GetSharedDllDisplayName(config, mod.dllName) : GetDllModDisplayName(mod)).c_str(),
             mod.dllName.c_str(),
-            mod.dllName.c_str());
+            GetModManifestOwner(config, ModMatch{type, i}).c_str());
     }
     for (const ResourceModEntry& mod : config.resourceMods) {
         const std::string manifestOwner = mod.manifestOwner.empty() ? mod.id : mod.manifestOwner;

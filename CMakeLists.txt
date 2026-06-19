@@ -53,7 +53,7 @@ target_compile_definitions(UtopianModLauncher PRIVATE
     _CRT_SECURE_NO_WARNINGS
     _WIN32_WINNT=0x0501
     _WIN32_IE=0x0500)
-target_link_libraries(UtopianModLauncher PRIVATE comctl32 comdlg32 shell32 ole32 oleaut32 bcrypt)
+target_link_libraries(UtopianModLauncher PRIVATE comctl32 comdlg32 shell32 ole32 oleaut32 bcrypt gdiplus)
 
 set_target_properties(UtopianModLauncher PROPERTIES
     OUTPUT_NAME "GameModLauncher"
@@ -71,6 +71,19 @@ add_custom_command(
 
 add_custom_command(
     TARGET UtopianModLauncher POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:UtopianModLauncher>/mods/.launcher"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/banner.txt"
-        "$<TARGET_FILE_DIR:UtopianModLauncher>/banner.txt")
+        "${CMAKE_CURRENT_SOURCE_DIR}/mods/.launcher/banner.txt"
+        "$<TARGET_FILE_DIR:UtopianModLauncher>/mods/.launcher/banner.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/mods/.launcher/banner.bmp"
+        "$<TARGET_FILE_DIR:UtopianModLauncher>/mods/.launcher/banner.bmp")
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mods/.launcher/banner.png")
+    add_custom_command(
+        TARGET UtopianModLauncher POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/mods/.launcher/banner.png"
+            "$<TARGET_FILE_DIR:UtopianModLauncher>/mods/.launcher/banner.png")
+endif()

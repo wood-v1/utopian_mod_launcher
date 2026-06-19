@@ -282,8 +282,9 @@ void ModSettingsDialog::LoadName()
         return;
     }
 
-    if (modView_.type == ModType::Dll) {
-        SetWindowTextString(nameEdit_, GetDllModDisplayName(config_->mods[modView_.index]));
+    if (modView_.type == ModType::Dll || modView_.type == ModType::DllDependency || modView_.type == ModType::SharedDll) {
+        const ModEntry& mod = config_->mods[modView_.index];
+        SetWindowTextString(nameEdit_, modView_.type == ModType::SharedDll ? GetSharedDllDisplayName(*config_, mod.dllName) : GetDllModDisplayName(mod));
     }
     else {
         SetWindowTextString(nameEdit_, GetResourceModDisplayName(config_->resourceMods[modView_.index]));
@@ -417,7 +418,7 @@ void ModSettingsDialog::SaveDocument()
         configChanged_ = true;
     }
 
-    if (!missingFile_ && !document_.path.empty() && modView_.type == ModType::Dll) {
+    if (!missingFile_ && !document_.path.empty() && (modView_.type == ModType::Dll || modView_.type == ModType::DllDependency || modView_.type == ModType::SharedDll)) {
         const std::string text = rawMode_ ? GetWindowTextString(rawEdit_) : SerializeModIniEntries(document_.entries);
         if (!WriteFileText(document_.path, text)) {
             ShowError(window_, "Failed to write " + document_.path);
@@ -432,7 +433,7 @@ void ModSettingsDialog::SaveDocument()
 void ModSettingsDialog::CreateDocument()
 {
     if (document_.path.empty()) {
-        if (!config_ || modView_.type != ModType::Dll) {
+        if (!config_ || (modView_.type != ModType::Dll && modView_.type != ModType::DllDependency && modView_.type != ModType::SharedDll)) {
             return;
         }
         document_.path = ReplaceExtension(config_->mods[modView_.index].dllPath, ".ini");

@@ -37,16 +37,104 @@ std::string ToForwardSlashes(std::string path)
     std::replace(path.begin(), path.end(), '\\', '/');
     return path;
 }
+
+bool EqualsNoCase(const std::string& left, const std::string& right)
+{
+    return _stricmp(left.c_str(), right.c_str()) == 0;
+}
+
+std::string JoinNames(const std::vector<std::string>& values)
+{
+    if (values.empty()) {
+        return "none";
+    }
+
+    std::string text;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) {
+            text += ", ";
+        }
+        text += values[i];
+    }
+    return text;
+}
+
+const InstalledPackageEntry* FindPackageByDll(const LauncherConfig& config, const std::string& dllName)
+{
+    for (const InstalledPackageEntry& package : config.packages) {
+        for (const std::string& packageDll : package.dlls) {
+            if (EqualsNoCase(packageDll, dllName)) {
+                return &package;
+            }
+        }
+    }
+    return nullptr;
+}
+
+const InstalledPackageEntry* FindPackageById(const LauncherConfig& config, const std::string& id)
+{
+    for (const InstalledPackageEntry& package : config.packages) {
+        if (EqualsNoCase(package.id, id)) {
+            return &package;
+        }
+    }
+    return nullptr;
+}
+
+std::string GetPackageName(const InstalledPackageEntry& package)
+{
+    return package.name.empty() ? package.id : package.name;
+}
+
+std::vector<std::string> GetPackageDependencyDlls(const InstalledPackageEntry& package)
+{
+    std::vector<std::string> dependencies;
+    for (const std::string& dllName : package.dlls) {
+        if (!EqualsNoCase(dllName, package.primaryDll)) {
+            dependencies.push_back(dllName);
+        }
+    }
+    return dependencies;
+}
+
+std::string BuildDllRelationshipStatus(const LauncherConfig& config, const ModEntry& mod, ModType type)
+{
+    if (type == ModType::SharedDll) {
+        std::vector<std::string> packageNames;
+        for (const SharedDllEntry& sharedDll : config.sharedDlls) {
+            if (!EqualsNoCase(sharedDll.dllName, mod.dllName)) {
+                continue;
+            }
+            for (const std::string& packageId : sharedDll.requiredBy) {
+                const InstalledPackageEntry* package = FindPackageById(config, packageId);
+                packageNames.push_back(package ? GetPackageName(*package) : packageId);
+            }
+            break;
+        }
+        return "Shared dependency: " + GetSharedDllDisplayName(config, mod.dllName) + ". Required by: " + JoinNames(packageNames) + ".";
+    }
+
+    const InstalledPackageEntry* package = FindPackageByDll(config, mod.dllName);
+    if (!package) {
+        return "Standalone DLL Mod: " + GetDllModDisplayName(mod) + ".";
+    }
+
+    if (type == ModType::DllDependency) {
+        return "Dependency of package " + GetPackageName(*package) + ". Primary DLL: " + package->primaryDll + ".";
+    }
+
+    return "Primary DLL of package " + GetPackageName(*package) + ". Dependencies: " + JoinNames(GetPackageDependencyDlls(*package)) + ".";
+}
 }
 
 void AddModListColumns(HWND modList)
 {
     AddListViewColumn(modList, 0, "Order", 45);
-    AddListViewColumn(modList, 1, "Mod", 125);
-    AddListViewColumn(modList, 2, "Type", 88);
-    AddListViewColumn(modList, 3, "Load stage", 82);
-    AddListViewColumn(modList, 4, "Delay", 52);
-    AddListViewColumn(modList, 5, "Settings", 70);
+    AddListViewColumn(modList, 1, "Mod", 110);
+    AddListViewColumn(modList, 2, "Type", 130);
+    AddListViewColumn(modList, 3, "Load stage", 78);
+    AddListViewColumn(modList, 4, "Delay", 44);
+    AddListViewColumn(modList, 5, "Settings", 60);
 }
 
 void PopulateModListView(HWND modList, const LauncherConfig& config, std::vector<InstalledModView>* modViews)
@@ -58,12 +146,20 @@ void PopulateModListView(HWND modList, const LauncherConfig& config, std::vector
 
     modViews->clear();
     for (std::size_t i = 0; i < config.mods.size(); ++i) {
-        modViews->push_back({ModType::Dll, i});
+        const ModType type = GetDllModType(config, config.mods[i].dllName);
+        modViews->push_back({type, i});
         const int row = static_cast<int>(modViews->size() - 1);
         const ModEntry& mod = config.mods[i];
+        const char* typeName = "DLL Mod";
+        if (type == ModType::DllDependency) {
+            typeName = "DLL Mod Dependency";
+        }
+        else if (type == ModType::SharedDll) {
+            typeName = "DLL Mod Shared Dependency";
+        }
         InsertListViewText(modList, row, 0, Uint32ToString(static_cast<uint32_t>(i + 1)));
-        InsertListViewText(modList, row, 1, GetDllModDisplayName(mod));
-        InsertListViewText(modList, row, 2, "DLL Mod");
+        InsertListViewText(modList, row, 1, type == ModType::SharedDll ? GetSharedDllDisplayName(config, mod.dllName) : GetDllModDisplayName(mod));
+        InsertListViewText(modList, row, 2, typeName);
         InsertListViewText(modList, row, 3, GetStageName(mod.stage));
         InsertListViewText(modList, row, 4, Uint32ToString(mod.delayMs));
         InsertListViewText(modList, row, 5, GetModSettingsStatus(mod));
@@ -130,6 +226,53 @@ std::string GetModConflictSummary(const LauncherConfig& config, const std::vecto
     return summary;
 }
 
+std::string BuildModRelationshipStatus(const LauncherConfig& config, const InstalledModView& view)
+{
+    if (view.type == ModType::Resource) {
+        const ResourceModEntry& mod = config.resourceMods[view.index];
+        return "Resource Mod: " + GetResourceModDisplayName(mod) + ".";
+    }
+
+    return BuildDllRelationshipStatus(config, config.mods[view.index], view.type);
+}
+
+std::string BuildModRelationshipDetails(const LauncherConfig& config, const InstalledModView& view)
+{
+    std::ostringstream text;
+    text << BuildModRelationshipStatus(config, view) << "\r\n";
+
+    if (view.type == ModType::Dll || view.type == ModType::DllDependency) {
+        const ModEntry& mod = config.mods[view.index];
+        const InstalledPackageEntry* package = FindPackageByDll(config, mod.dllName);
+        if (package) {
+            text << "Package: " << GetPackageName(*package) << "\r\n";
+            text << "Primary DLL: " << package->primaryDll << "\r\n";
+            text << "Package DLLs: " << JoinNames(package->dlls) << "\r\n";
+            text << "Shared dependencies: " << JoinNames(package->sharedDlls) << "\r\n";
+            text << "Delete action: deletes this whole package; shared dependencies stay installed.\r\n";
+        }
+    }
+    else if (view.type == ModType::SharedDll) {
+        const ModEntry& mod = config.mods[view.index];
+        for (const SharedDllEntry& sharedDll : config.sharedDlls) {
+            if (!EqualsNoCase(sharedDll.dllName, mod.dllName)) {
+                continue;
+            }
+            std::vector<std::string> packageNames;
+            for (const std::string& packageId : sharedDll.requiredBy) {
+                const InstalledPackageEntry* package = FindPackageById(config, packageId);
+                packageNames.push_back(package ? GetPackageName(*package) : packageId);
+            }
+            text << "Required by packages: " << JoinNames(packageNames) << "\r\n";
+            text << "Manifest owner: " << (sharedDll.manifestOwner.empty() ? "shared-" + sharedDll.dllName : sharedDll.manifestOwner) << "\r\n";
+            text << "Delete action: blocked while required by any package.\r\n";
+            break;
+        }
+    }
+
+    return text.str();
+}
+
 InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const InstalledModView& view)
 {
     const ModMatch match{view.type, view.index};
@@ -137,7 +280,7 @@ InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const I
     const std::string modName = GetModDisplayName(config, match);
     std::vector<InstallManifestEntryInfo> entries;
     if (!ReadInstallManifestEntriesInfo(GetDefaultGameRootDirectory(), owner, &entries) || entries.empty()) {
-        return {"No install manifest found for " + modName + ".", "No installed file list is available for " + modName + ".", false};
+        return {BuildModRelationshipDetails(config, view) + "\r\nNo install manifest found for " + modName + ".", "No installed file list is available for " + modName + ".", false};
     }
 
     std::sort(entries.begin(), entries.end(), [](const InstallManifestEntryInfo& left, const InstallManifestEntryInfo& right) {
@@ -145,6 +288,7 @@ InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const I
     });
 
     std::ostringstream text;
+    text << BuildModRelationshipDetails(config, view) << "\r\nInstalled files:\r\n";
     for (const InstallManifestEntryInfo& entry : entries) {
         text << ToForwardSlashes(entry.relativePath) << "\r\n";
     }

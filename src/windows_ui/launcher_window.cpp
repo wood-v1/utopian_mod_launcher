@@ -20,6 +20,9 @@
 #include "../string_utils.h"
 
 #include <commctrl.h>
+#include <objidl.h>
+#include <olectl.h>
+#include <gdiplus.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -100,6 +103,55 @@ struct BackupsAuditPayload
 {
     std::vector<ManifestAuditEntry> audit;
 };
+
+std::string GetLauncherAssetDirectory()
+{
+    return JoinPath(JoinPath(GetModuleDirectory(), "mods"), ".launcher");
+}
+
+std::wstring ToWidePath(const std::string& path)
+{
+    const int length = ::MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, nullptr, 0);
+    if (length <= 0) {
+        return std::wstring();
+    }
+
+    std::wstring wide(static_cast<std::size_t>(length), L'\0');
+    ::MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, &wide[0], length);
+    if (!wide.empty() && wide.back() == L'\0') {
+        wide.pop_back();
+    }
+    return wide;
+}
+
+HBITMAP LoadPngBanner(const std::string& path)
+{
+    const std::wstring widePath = ToWidePath(path);
+    if (widePath.empty()) {
+        return nullptr;
+    }
+
+    Gdiplus::GdiplusStartupInput input;
+    ULONG_PTR token = 0;
+    if (Gdiplus::GdiplusStartup(&token, &input, nullptr) != Gdiplus::Ok) {
+        return nullptr;
+    }
+
+    HBITMAP bitmapHandle = nullptr;
+    {
+        Gdiplus::Bitmap source(widePath.c_str());
+        if (source.GetLastStatus() == Gdiplus::Ok) {
+            Gdiplus::Bitmap scaled(500, 72, PixelFormat32bppARGB);
+            Gdiplus::Graphics graphics(&scaled);
+            graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            graphics.DrawImage(&source, 0, 0, 500, 72);
+            scaled.GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &bitmapHandle);
+        }
+    }
+
+    Gdiplus::GdiplusShutdown(token);
+    return bitmapHandle;
+}
 
 }
 
@@ -415,18 +467,25 @@ void LauncherWindow::ApplyDefaultFont(HWND parent)
 
 void LauncherWindow::LoadBanner()
 {
-    const std::string bannerPath = JoinPath(GetModuleDirectory(), "banner.bmp");
-    if (!FileExists(bannerPath.c_str())) {
-        return;
+    const std::string assetDirectory = GetLauncherAssetDirectory();
+    const std::string pngPath = JoinPath(assetDirectory, "banner.png");
+    if (FileExists(pngPath.c_str())) {
+        bannerBitmap_ = LoadPngBanner(pngPath);
     }
 
-    bannerBitmap_ = static_cast<HBITMAP>(::LoadImageA(
-        nullptr,
-        bannerPath.c_str(),
-        IMAGE_BITMAP,
-        500,
-        72,
-        LR_LOADFROMFILE));
+    if (!bannerBitmap_) {
+        const std::string bmpPath = JoinPath(assetDirectory, "banner.bmp");
+        if (FileExists(bmpPath.c_str())) {
+            bannerBitmap_ = static_cast<HBITMAP>(::LoadImageA(
+                nullptr,
+                bmpPath.c_str(),
+                IMAGE_BITMAP,
+                500,
+                72,
+                LR_LOADFROMFILE));
+        }
+    }
+
     if (bannerBitmap_) {
         ::SendMessageA(bannerControl_, STM_SETIMAGE, IMAGE_BITMAP, reinterpret_cast<LPARAM>(bannerBitmap_));
     }
@@ -450,7 +509,7 @@ void LauncherWindow::ReloadConfigAndList(const std::string& selectName)
     PopulateModList();
     int selected = -1;
     for (std::size_t i = 0; i < modViews_.size(); ++i) {
-        if (modViews_[i].type == ModType::Dll
+        if ((modViews_[i].type == ModType::Dll || modViews_[i].type == ModType::DllDependency || modViews_[i].type == ModType::SharedDll)
             && _stricmp(config_.mods[modViews_[i].index].dllName.c_str(), selectName.c_str()) == 0) {
             selected = static_cast<int>(i);
             break;
@@ -520,12 +579,13 @@ void LauncherWindow::LoadSelectedModControls()
     }
 
     const InstalledModView& view = modViews_[static_cast<std::size_t>(selectedViewIndex_)];
-    if (view.type == ModType::Dll) {
+    if (view.type == ModType::Dll || view.type == ModType::DllDependency || view.type == ModType::SharedDll) {
         const ModEntry& mod = config_.mods[view.index];
         ComboBox_SetCurSel(stageCombo_, StageToComboIndex(mod.stage));
         SetWindowTextString(delayEdit_, Uint32ToString(mod.delayMs));
         const std::string conflictSummary = GetModConflictSummary(config_, conflictCache_, view);
-        SetWindowTextString(statusLabel_, conflictSummary.empty() ? "Selected: " + GetDllModDisplayName(mod) : conflictSummary);
+        const std::string status = BuildModRelationshipStatus(config_, view);
+        SetWindowTextString(statusLabel_, conflictSummary.empty() ? status : conflictSummary);
     }
     else {
         const ResourceModEntry& mod = config_.resourceMods[view.index];
@@ -567,11 +627,16 @@ void LauncherWindow::ApplySelectedModControls(bool showErrors)
         SetWindowTextString(delayEdit_, "0");
     }
 
-    if (view.type == ModType::Dll) {
+    if (view.type == ModType::Dll || view.type == ModType::DllDependency || view.type == ModType::SharedDll) {
         ModEntry& mod = config_.mods[view.index];
         mod.stage = stage;
         mod.delayMs = delay;
         mod.spec = SerializeModEntry(mod);
+        if (view.type == ModType::SharedDll) {
+            ModMatch match{view.type, view.index};
+            std::string ignored;
+            SetInstalledModStage(&config_, match, stage, delay, &ignored);
+        }
     }
     else {
         ResourceModEntry& mod = config_.resourceMods[view.index];
@@ -637,10 +702,10 @@ void LauncherWindow::UpdateActionState()
     bool selectedIsDll = false;
     if (hasSelection) {
         const InstalledModView& view = modViews_[static_cast<std::size_t>(selectedViewIndex_)];
-        selectedIsDll = view.type == ModType::Dll;
+        selectedIsDll = view.type == ModType::Dll || view.type == ModType::DllDependency || view.type == ModType::SharedDll;
         canMoveUp = view.index > 0;
         canOpenSettings = true;
-        if (view.type == ModType::Dll) {
+        if (view.type == ModType::Dll || view.type == ModType::DllDependency || view.type == ModType::SharedDll) {
             canMoveDown = view.index + 1 < config_.mods.size();
         }
         else {
@@ -675,7 +740,7 @@ void LauncherWindow::MoveSelectedMod(int direction)
     }
 
     const InstalledModView view = modViews_[static_cast<std::size_t>(index)];
-    if (view.type == ModType::Dll) {
+    if (view.type == ModType::Dll || view.type == ModType::DllDependency || view.type == ModType::SharedDll) {
         const int target = static_cast<int>(view.index) + direction;
         if (target < 0 || target >= static_cast<int>(config_.mods.size())) {
             return;
@@ -1107,7 +1172,7 @@ void LauncherWindow::FinishPackageInstall(int requestId, void* payload)
     for (std::size_t i = 0; i < modViews_.size(); ++i) {
         const InstalledModView& view = modViews_[i];
         if (result.type == ModType::Dll
-            && view.type == ModType::Dll
+            && (view.type == ModType::Dll || view.type == ModType::DllDependency || view.type == ModType::SharedDll)
             && _stricmp(config_.mods[view.index].dllName.c_str(), result.manifestOwner.c_str()) == 0) {
             SelectMod(static_cast<int>(i));
             break;
@@ -1133,10 +1198,18 @@ void LauncherWindow::DeleteSelectedMod()
     const InstalledModView view = modViews_[static_cast<std::size_t>(index)];
     const ModMatch match{view.type, view.index};
     const std::string displayName = GetModDisplayName(config_, match);
+    std::string packageNotice;
+    if (view.type == ModType::Dll || view.type == ModType::DllDependency) {
+        const std::string packageName = GetDllPackageName(config_, config_.mods[view.index].dllName);
+        if (!packageName.empty()) {
+            packageNotice = "This DLL belongs to package " + packageName + ". The whole package will be deleted, except shared dependencies.\n\n";
+        }
+    }
     const int confirmation = ::MessageBoxA(
         window_,
         ("Delete " + displayName + " from disk?\n\n"
-         "This will remove the mod from the launcher and delete the files it installed.\n\n"
+         + packageNotice
+         + "This will remove the mod from the launcher and delete the files it installed.\n\n"
          "If the mod replaced original game files, the launcher will restore its saved backups.\n"
          "If a file was edited after the mod was installed, it will be kept as-is.\n\n"
          "Continue?").c_str(),
