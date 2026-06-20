@@ -549,6 +549,24 @@ void WriteLaunchOverlayProgress(const std::string& statusPath, const LaunchOverl
         return;
     }
 
+    std::vector<std::string> dllModNames = progress.dllModNames;
+    std::vector<std::string> resourceModNames = progress.resourceModNames;
+    if (dllModNames.empty() || resourceModNames.empty()) {
+        const std::map<std::string, std::string> previousValues = ReadStatusFile(statusPath);
+        if (dllModNames.empty()) {
+            const auto previousDllNames = previousValues.find("dllNames");
+            if (previousDllNames != previousValues.end()) {
+                dllModNames = SplitStatusList(previousDllNames->second);
+            }
+        }
+        if (resourceModNames.empty()) {
+            const auto previousResourceNames = previousValues.find("resourceNames");
+            if (previousResourceNames != previousValues.end()) {
+                resourceModNames = SplitStatusList(previousResourceNames->second);
+            }
+        }
+    }
+
     const std::string tempPath = statusPath + ".tmp";
     {
         std::ofstream output(tempPath, std::ios::trunc);
@@ -556,11 +574,11 @@ void WriteLaunchOverlayProgress(const std::string& statusPath, const LaunchOverl
             return;
         }
         output << "current=" << SanitizeStatusValue(progress.current) << "\n";
-        if (!progress.dllModNames.empty()) {
-            output << "dllNames=" << JoinStatusList(progress.dllModNames) << "\n";
+        if (!dllModNames.empty()) {
+            output << "dllNames=" << JoinStatusList(dllModNames) << "\n";
         }
-        if (!progress.resourceModNames.empty()) {
-            output << "resourceNames=" << JoinStatusList(progress.resourceModNames) << "\n";
+        if (!resourceModNames.empty()) {
+            output << "resourceNames=" << JoinStatusList(resourceModNames) << "\n";
         }
         output << "completed=" << progress.completedCount << "\n";
         output << "total=" << progress.totalCount << "\n";
