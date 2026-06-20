@@ -983,7 +983,7 @@ void LauncherWindow::InstallMod()
         }
 
         if (!HasPackageArchiveExtension(archivePath)) {
-            ShowError(window_, "Unsupported archive type. Choose a .zip or .rar package.");
+            ShowError(window_, "Unsupported archive type. Choose a .zip, .rar, or .7z package.");
             return;
         }
         StartArchivePreparation(archivePath);
@@ -1475,7 +1475,7 @@ void LauncherWindow::InstallDroppedPath(const std::string& path)
         return;
     }
 
-    ShowError(window_, "Drop a mod folder, .zip archive, or .rar archive.");
+    ShowError(window_, "Drop a mod folder, .zip archive, .rar archive, or .7z archive.");
     SetWindowTextString(statusLabel_, "Drop cancelled: unsupported file type.");
 }
 

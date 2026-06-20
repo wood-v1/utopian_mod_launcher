@@ -129,9 +129,10 @@ affect game launch because resource mods are installed as files on disk.
 
 ## Installing mods
 
-In the UI, `Install Mod` accepts folders and `.zip`/`.rar` packages. Folder
+In the UI, `Install Mod` accepts folders and `.zip`/`.rar`/`.7z` packages. Folder
 install is also available from CLI with `install --folder <path>`. RAR support
-uses Windows shell support first, then installed WinRAR/UnRAR if available.
+uses Windows shell support first, then installed WinRAR/UnRAR if available; 7z
+support uses Windows shell support first, then installed 7-Zip if available.
 Selecting an installed mod shows the files tracked by its install manifest.
 Double-click opens the mod settings and rename dialog.
 
@@ -209,6 +210,7 @@ highlighted in the UI, and package install warns before continuing.
 - `GameModLauncher.exe list`: print installed DLL and resource mods
 - `GameModLauncher.exe install --zip <path> [--name <name>] [--dll <dllName>]`: install a zip package
 - `GameModLauncher.exe install --rar <path> [--name <name>] [--dll <dllName>]`: install a rar package
+- `GameModLauncher.exe install --7z <path> [--name <name>] [--dll <dllName>]`: install a 7z package
 - `GameModLauncher.exe install --folder <path> [--name <name>] [--dll <dllName>]`: install a folder package
 - `GameModLauncher.exe delete --mod <name|id|dll>`: safe-delete an installed mod
 - `GameModLauncher.exe rename --mod <name|id|dll> --name <newName>`: change display name

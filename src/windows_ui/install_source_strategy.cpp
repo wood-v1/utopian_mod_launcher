@@ -35,7 +35,7 @@ std::string DefaultModNameFromPath(const std::string& path)
 
 bool HasPackageArchiveExtension(const std::string& path)
 {
-    return HasExtensionNoCase(path, ".zip") || HasExtensionNoCase(path, ".rar");
+    return HasExtensionNoCase(path, ".zip") || HasExtensionNoCase(path, ".rar") || HasExtensionNoCase(path, ".7z");
 }
 
 bool FolderInstallStrategy::Prepare(HWND owner, PreparedInstallPackage* package, std::string* error)
@@ -77,7 +77,15 @@ bool ArchiveInstallStrategy::Prepare(HWND, PreparedInstallPackage* package, std:
     package->packageRoot = tempDirectory;
     package->defaultName = DefaultModNameFromPath(archivePath_);
     package->tempDirectory = tempDirectory;
-    package->sourceKind = HasExtensionNoCase(archivePath_, ".rar") ? InstallSourceKind::Rar : InstallSourceKind::Zip;
+    if (HasExtensionNoCase(archivePath_, ".rar")) {
+        package->sourceKind = InstallSourceKind::Rar;
+    }
+    else if (HasExtensionNoCase(archivePath_, ".7z")) {
+        package->sourceKind = InstallSourceKind::SevenZip;
+    }
+    else {
+        package->sourceKind = InstallSourceKind::Zip;
+    }
     return true;
 }
 }

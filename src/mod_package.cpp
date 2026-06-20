@@ -616,6 +616,7 @@ bool IsRootPackageMetadata(const std::string& relativePath)
         || HasExtensionNoCase(normalized, ".cmd")
         || HasExtensionNoCase(normalized, ".zip")
         || HasExtensionNoCase(normalized, ".rar")
+        || HasExtensionNoCase(normalized, ".7z")
         || _stricmp(normalized.c_str(), "install") == 0
         || _stricmp(normalized.c_str(), "readme") == 0;
 }

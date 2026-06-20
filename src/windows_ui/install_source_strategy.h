@@ -10,7 +10,8 @@ enum class InstallSourceKind
 {
     Folder,
     Zip,
-    Rar
+    Rar,
+    SevenZip
 };
 
 struct PreparedInstallPackage

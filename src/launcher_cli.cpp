@@ -153,6 +153,7 @@ int PrintUsage()
         "  GameModLauncher.exe list\n"
         "  GameModLauncher.exe install --zip <path> [--name <name>] [--dll <dllName>] [--overwrite-dll <dll>|--skip-dll <dll>]\n"
         "  GameModLauncher.exe install --rar <path> [--name <name>] [--dll <dllName>] [--overwrite-dll <dll>|--skip-dll <dll>]\n"
+        "  GameModLauncher.exe install --7z <path> [--name <name>] [--dll <dllName>] [--overwrite-dll <dll>|--skip-dll <dll>]\n"
         "  GameModLauncher.exe install --folder <path> [--name <name>] [--dll <dllName>] [--overwrite-dll <dll>|--skip-dll <dll>]\n"
         "  GameModLauncher.exe delete --mod <name|id|dll>\n"
         "  GameModLauncher.exe rename --mod <name|id|dll> --name <newName>\n"
@@ -215,7 +216,7 @@ int CommandInstall(int argc, char** argv)
     std::string archivePath;
     std::string tempDirectory;
     std::string error;
-    if (GetOption(argc, argv, "--zip", &archivePath) || GetOption(argc, argv, "--rar", &archivePath)) {
+    if (GetOption(argc, argv, "--zip", &archivePath) || GetOption(argc, argv, "--rar", &archivePath) || GetOption(argc, argv, "--7z", &archivePath)) {
         if (!windows_ui::CreateTempDirectory(&tempDirectory, &error) || !windows_ui::ExtractArchiveToDirectory(archivePath, tempDirectory, &error)) {
             std::printf("%s\n", error.c_str());
             return 1;
@@ -223,7 +224,7 @@ int CommandInstall(int argc, char** argv)
         packageRoot = tempDirectory;
     }
     else if (!GetOption(argc, argv, "--folder", &packageRoot)) {
-        std::printf("install requires --zip, --rar or --folder.\n");
+        std::printf("install requires --zip, --rar, --7z or --folder.\n");
         return 1;
     }
 

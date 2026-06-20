@@ -139,16 +139,28 @@ std::vector<std::string> GetRarExtractorCandidates()
     return candidates;
 }
 
-bool RunExtractorProcess(const std::string& executable, const std::string& archivePath, const std::string& targetDirectory, std::string* error)
+std::vector<std::string> Get7zExtractorCandidates()
 {
-    const std::string exeName = FileNamePart(executable);
-    const bool isUnrar = _stricmp(exeName.c_str(), "UnRAR.exe") == 0;
-    std::string commandLine = QuoteArg(executable);
-    commandLine += isUnrar ? " x -y " : " x -ibck -y ";
-    commandLine += QuoteArg(archivePath);
-    commandLine += " ";
-    commandLine += QuoteArg(targetDirectory + "\\");
+    std::vector<std::string> candidates;
+    std::string installPath;
+    if (ReadRegistryString(HKEY_LOCAL_MACHINE, "SOFTWARE\\7-Zip", "Path", &installPath)
+        || ReadRegistryString(HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\7-Zip", "Path", &installPath)
+        || ReadRegistryString(HKEY_CURRENT_USER, "SOFTWARE\\7-Zip", "Path", &installPath)) {
+        candidates.push_back(JoinPath(installPath, "7z.exe"));
+    }
 
+    char pathBuffer[MAX_PATH] = {};
+    if (::SearchPathA(nullptr, "7z.exe", nullptr, MAX_PATH, pathBuffer, nullptr) > 0) {
+        candidates.push_back(pathBuffer);
+    }
+
+    candidates.push_back("C:\\Program Files\\7-Zip\\7z.exe");
+    candidates.push_back("C:\\Program Files (x86)\\7-Zip\\7z.exe");
+    return candidates;
+}
+
+bool RunProcessCommandLine(const std::string& commandLine, const std::string& label, std::string* error)
+{
     STARTUPINFOA startupInfo = {};
     startupInfo.cb = sizeof(startupInfo);
     startupInfo.dwFlags = STARTF_USESHOWWINDOW;
@@ -169,7 +181,7 @@ bool RunExtractorProcess(const std::string& executable, const std::string& archi
             &startupInfo,
             &processInfo) == FALSE) {
         if (error) {
-            *error = "Failed to run RAR extractor: " + executable;
+            *error = "Failed to run " + label + ".";
         }
         return false;
     }
@@ -182,11 +194,33 @@ bool RunExtractorProcess(const std::string& executable, const std::string& archi
 
     if (exitCode != 0) {
         if (error) {
-            *error = "RAR extractor failed with exit code " + std::to_string(exitCode) + ": " + executable;
+            *error = label + " failed with exit code " + std::to_string(exitCode) + ".";
         }
         return false;
     }
     return true;
+}
+
+bool RunRarExtractorProcess(const std::string& executable, const std::string& archivePath, const std::string& targetDirectory, std::string* error)
+{
+    const std::string exeName = FileNamePart(executable);
+    const bool isUnrar = _stricmp(exeName.c_str(), "UnRAR.exe") == 0;
+    std::string commandLine = QuoteArg(executable);
+    commandLine += isUnrar ? " x -y " : " x -ibck -y ";
+    commandLine += QuoteArg(archivePath);
+    commandLine += " ";
+    commandLine += QuoteArg(targetDirectory + "\\");
+    return RunProcessCommandLine(commandLine, "RAR extractor: " + executable, error);
+}
+
+bool Run7zExtractorProcess(const std::string& executable, const std::string& archivePath, const std::string& targetDirectory, std::string* error)
+{
+    std::string commandLine = QuoteArg(executable);
+    commandLine += " x -y ";
+    commandLine += QuoteArg("-o" + targetDirectory);
+    commandLine += " ";
+    commandLine += QuoteArg(archivePath);
+    return RunProcessCommandLine(commandLine, "7-Zip extractor: " + executable, error);
 }
 
 bool ExtractRarWithInstalledTool(const std::string& archivePath, const std::string& targetDirectory, std::string* error)
@@ -203,7 +237,7 @@ bool ExtractRarWithInstalledTool(const std::string& archivePath, const std::stri
         if (!FileExists(candidate.c_str())) {
             continue;
         }
-        if (RunExtractorProcess(candidate, archivePath, targetDirectory, &lastError)) {
+        if (RunRarExtractorProcess(candidate, archivePath, targetDirectory, &lastError)) {
             return true;
         }
     }
@@ -211,6 +245,33 @@ bool ExtractRarWithInstalledTool(const std::string& archivePath, const std::stri
     if (error) {
         *error = lastError.empty()
             ? "RAR extraction is not available. Install WinRAR/UnRAR or repack the mod as .zip."
+            : lastError;
+    }
+    return false;
+}
+
+bool Extract7zWithInstalledTool(const std::string& archivePath, const std::string& targetDirectory, std::string* error)
+{
+    if (!CreateDirectoryRecursive(targetDirectory)) {
+        if (error) {
+            *error = "Failed to create extraction directory: " + targetDirectory;
+        }
+        return false;
+    }
+
+    std::string lastError;
+    for (const std::string& candidate : Get7zExtractorCandidates()) {
+        if (!FileExists(candidate.c_str())) {
+            continue;
+        }
+        if (Run7zExtractorProcess(candidate, archivePath, targetDirectory, &lastError)) {
+            return true;
+        }
+    }
+
+    if (error) {
+        *error = lastError.empty()
+            ? "7z extraction is not available. Install 7-Zip or repack the mod as .zip."
             : lastError;
     }
     return false;
@@ -451,7 +512,12 @@ bool PickModPackageFile(HWND owner, std::string* path)
     OPENFILENAMEA openFileName = {};
     openFileName.lStructSize = sizeof(openFileName);
     openFileName.hwndOwner = owner;
-    openFileName.lpstrFilter = "Mod Archives (*.zip;*.rar)\0*.zip;*.rar\0Zip Archives (*.zip)\0*.zip\0RAR Archives (*.rar)\0*.rar\0All Files (*.*)\0*.*\0";
+    openFileName.lpstrFilter =
+        "Mod Archives (*.zip;*.rar;*.7z)\0*.zip;*.rar;*.7z\0"
+        "Zip Archives (*.zip)\0*.zip\0"
+        "RAR Archives (*.rar)\0*.rar\0"
+        "7z Archives (*.7z)\0*.7z\0"
+        "All Files (*.*)\0*.*\0";
     openFileName.lpstrFile = fileName;
     openFileName.nMaxFile = sizeof(fileName);
     openFileName.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
@@ -640,6 +706,17 @@ bool ExtractArchiveToDirectory(const std::string& archivePath, const std::string
         }
         if (error) {
             *error = "Failed to extract RAR archive.\n\nShell extraction: " + shellError + "\nWinRAR/UnRAR: " + rarError;
+        }
+        return false;
+    }
+
+    if (HasExtensionNoCase(archivePath, ".7z")) {
+        std::string sevenZipError;
+        if (Extract7zWithInstalledTool(archivePath, targetDirectory, &sevenZipError)) {
+            return true;
+        }
+        if (error) {
+            *error = "Failed to extract 7z archive.\n\nShell extraction: " + shellError + "\n7-Zip: " + sevenZipError;
         }
         return false;
     }
