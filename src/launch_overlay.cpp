@@ -19,11 +19,11 @@ constexpr UINT_PTR kOverlayTimerId = 1;
 constexpr UINT kOverlayTickMs = 250;
 constexpr DWORD kWaitingOverlayMs = 120000;
 constexpr DWORD kVisibleOverlayMs = 10000;
-constexpr int kOverlayWidth = 440;
+constexpr int kOverlayWidth = 560;
 constexpr int kOverlayHeight = 152;
 constexpr int kOverlayMargin = 18;
 constexpr std::size_t kMaxSummaryItems = 10;
-constexpr std::size_t kMaxSummaryNameLength = 10;
+constexpr std::size_t kMaxSummaryNameLength = 18;
 
 struct OverlayState
 {
@@ -250,7 +250,7 @@ std::string CompactName(const std::string& name)
     if (name.size() <= kMaxSummaryNameLength) {
         return name;
     }
-    return name.substr(0, kMaxSummaryNameLength - 3) + "...";
+    return name.substr(0, kMaxSummaryNameLength - 2) + "..";
 }
 
 std::string BuildSummaryList(
