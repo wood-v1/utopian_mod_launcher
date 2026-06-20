@@ -1,4 +1,6 @@
+#include "launch_overlay.h"
 #include "launcher_cli.h"
+#include "launcher_version.h"
 #include "path_utils.h"
 #include "self_tests.h"
 #include "windows_ui/launcher_window.h"
@@ -7,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -198,7 +201,7 @@ void PrintUiConsoleBanner()
 
     PrintGradientBanner(
         "\n"
-        "  UTOPIAN LAUNCHER 1.0\n"
+        "  UTOPIAN LAUNCHER " + std::string(uml::kLauncherVersion) + "\n"
         "  --------------------\n"
         "\n"
         "  Native UI is open. Use `GameModLauncher.exe help` for CLI commands.\n"
@@ -208,6 +211,14 @@ void PrintUiConsoleBanner()
 
 int main(int argc, char** argv)
 {
+    if (argc == 5 && ::_stricmp(argv[1], "--launch-overlay") == 0) {
+        uml::LaunchOverlayInfo info;
+        info.version = uml::kLauncherVersion;
+        info.dllModCount = static_cast<uint32_t>(std::strtoul(argv[3], nullptr, 10));
+        info.resourceModCount = static_cast<uint32_t>(std::strtoul(argv[4], nullptr, 10));
+        return uml::RunLaunchOverlayProcess(static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10)), info);
+    }
+
     if (argc > 1 && ::_stricmp(argv[1], "--self-test") == 0) {
         return uml::RunSelfTests() ? 0 : 1;
     }

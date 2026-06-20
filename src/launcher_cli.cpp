@@ -3,6 +3,7 @@
 #include "launcher_config.h"
 #include "launcher_runtime.h"
 #include "launcher_services.h"
+#include "launcher_version.h"
 #include "load_order.h"
 #include "path_utils.h"
 #include "string_utils.h"
@@ -17,8 +18,6 @@ namespace uml
 {
 namespace
 {
-constexpr const char* kLauncherVersion = "1.0";
-
 bool EqualsNoCase(const char* left, const char* right)
 {
     return ::_stricmp(left, right) == 0;

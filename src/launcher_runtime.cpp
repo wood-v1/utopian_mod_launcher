@@ -1,6 +1,8 @@
 #include "launcher_runtime.h"
 
 #include "dll_injector.h"
+#include "launch_overlay.h"
+#include "launcher_version.h"
 #include "load_order.h"
 #include "path_utils.h"
 #include "process_utils.h"
@@ -177,6 +179,14 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
 
     if (ok && !processResumed) {
         ::ResumeThread(processInfo.hThread);
+    }
+
+    if (ok) {
+        LaunchOverlayInfo overlayInfo;
+        overlayInfo.version = kLauncherVersion;
+        overlayInfo.dllModCount = static_cast<uint32_t>(config.mods.size());
+        overlayInfo.resourceModCount = static_cast<uint32_t>(config.resourceMods.size());
+        ShowLaunchOverlayForProcess(static_cast<uint32_t>(processInfo.dwProcessId), overlayInfo);
     }
 
     if (!ok) {

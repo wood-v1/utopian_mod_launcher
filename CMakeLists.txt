@@ -22,6 +22,7 @@ add_executable(UtopianModLauncher
     src/dll_injector.cpp
     src/launcher_cli.cpp
     src/launcher_config.cpp
+    src/launch_overlay.cpp
     src/launcher_runtime.cpp
     src/launcher_services.cpp
     src/load_order.cpp
