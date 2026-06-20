@@ -4,6 +4,7 @@
 #include "../launcher_services.h"
 
 #include <windows.h>
+#include <shellapi.h>
 
 namespace uml::windows_ui
 {
@@ -18,6 +19,7 @@ public:
 private:
     static LRESULT CALLBACK WindowProcSetup(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK WindowProcThunk(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK DropTargetSubclassProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);
 
     LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam);
     HWND CreateLabel(const char* text, int x, int y, int width, int height);
@@ -67,6 +69,9 @@ private:
     void FinishModDelete(int requestId, void* payload);
     void StartBackupsAudit();
     void FinishBackupsAudit(int requestId, void* payload);
+    void EnableDragAndDrop();
+    void HandleDroppedFiles(HDROP drop);
+    void InstallDroppedPath(const std::string& path);
     void HandleCommand(int id, int notification);
     LRESULT HandleNotify(NMHDR* header);
 

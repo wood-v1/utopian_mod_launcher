@@ -23,6 +23,7 @@
 #include <objidl.h>
 #include <olectl.h>
 #include <gdiplus.h>
+#include <shellapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -63,6 +64,7 @@ constexpr UINT kPackageAnalyzedMessage = WM_APP + 35;
 constexpr UINT kBackupsAuditLoadedMessage = WM_APP + 36;
 constexpr UINT_PTR kInstalledFilesLoadingTimer = 3001;
 constexpr UINT_PTR kBusySpinnerTimer = 3002;
+constexpr UINT_PTR kDropTargetSubclassId = 4001;
 
 struct PreparedPackagePayload
 {
@@ -306,6 +308,21 @@ LRESULT CALLBACK LauncherWindow::WindowProcThunk(HWND window, UINT message, WPAR
     return self->WindowProc(message, wParam, lParam);
 }
 
+LRESULT CALLBACK LauncherWindow::DropTargetSubclassProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData)
+{
+    LauncherWindow* self = reinterpret_cast<LauncherWindow*>(refData);
+    if (message == WM_DROPFILES && self) {
+        self->HandleDroppedFiles(reinterpret_cast<HDROP>(wParam));
+        return 0;
+    }
+
+    if (message == WM_NCDESTROY) {
+        ::RemoveWindowSubclass(window, &LauncherWindow::DropTargetSubclassProc, subclassId);
+    }
+
+    return ::DefSubclassProc(window, message, wParam, lParam);
+}
+
 LRESULT LauncherWindow::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
@@ -324,6 +341,9 @@ LRESULT LauncherWindow::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_NOTIFY:
         return HandleNotify(reinterpret_cast<NMHDR*>(lParam));
+    case WM_DROPFILES:
+        HandleDroppedFiles(reinterpret_cast<HDROP>(wParam));
+        return 0;
     case WM_TIMER:
         if (wParam == kInstalledFilesLoadingTimer) {
             UpdateInstalledFilesLoadingIndicator();
@@ -513,6 +533,7 @@ void LauncherWindow::CreateControls()
     ::SendMessageA(titleLabel_, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont_), TRUE);
     ::SendMessageA(launchButton_, WM_SETFONT, reinterpret_cast<WPARAM>(launchFont_), TRUE);
     LoadBanner();
+    EnableDragAndDrop();
 }
 
 void LauncherWindow::ApplyDefaultFont(HWND parent)
@@ -1386,6 +1407,76 @@ void LauncherWindow::FinishBackupsAudit(int requestId, void* payload)
     EndBusy();
     SetWindowTextString(statusLabel_, "Backups loaded.");
     ShowBackedUpFilesAuditDialog(window_, result->audit);
+}
+
+void LauncherWindow::EnableDragAndDrop()
+{
+    ::DragAcceptFiles(window_, TRUE);
+
+    HWND child = ::GetWindow(window_, GW_CHILD);
+    while (child) {
+        ::DragAcceptFiles(child, TRUE);
+        ::SetWindowSubclass(child, &LauncherWindow::DropTargetSubclassProc, kDropTargetSubclassId, reinterpret_cast<DWORD_PTR>(this));
+        child = ::GetWindow(child, GW_HWNDNEXT);
+    }
+}
+
+void LauncherWindow::HandleDroppedFiles(HDROP drop)
+{
+    if (!drop) {
+        return;
+    }
+
+    const UINT count = ::DragQueryFileA(drop, 0xFFFFFFFF, nullptr, 0);
+    std::string path;
+    if (count == 1) {
+        const UINT length = ::DragQueryFileA(drop, 0, nullptr, 0);
+        if (length > 0) {
+            path.resize(static_cast<std::size_t>(length + 1));
+            ::DragQueryFileA(drop, 0, &path[0], length + 1);
+            if (!path.empty() && path.back() == '\0') {
+                path.pop_back();
+            }
+        }
+    }
+    ::DragFinish(drop);
+
+    if (count != 1) {
+        ShowError(window_, "Drop exactly one mod folder or archive.");
+        SetWindowTextString(statusLabel_, "Drop cancelled: multiple items are not supported.");
+        return;
+    }
+
+    if (path.empty()) {
+        ShowError(window_, "Dropped path could not be read.");
+        SetWindowTextString(statusLabel_, "Drop cancelled.");
+        return;
+    }
+
+    InstallDroppedPath(path);
+}
+
+void LauncherWindow::InstallDroppedPath(const std::string& path)
+{
+    if (busy_) {
+        ShowInfo(window_, "Please wait until the current operation finishes.");
+        return;
+    }
+
+    if (DirectoryExists(path.c_str())) {
+        SetWindowTextString(statusLabel_, "Dropped folder package. Checking contents...");
+        InstallModFromPackage(path, DefaultModNameFromPath(path));
+        return;
+    }
+
+    if (FileExists(path.c_str()) && HasPackageArchiveExtension(path)) {
+        SetWindowTextString(statusLabel_, "Dropped archive package. Preparing install...");
+        StartArchivePreparation(path);
+        return;
+    }
+
+    ShowError(window_, "Drop a mod folder, .zip archive, or .rar archive.");
+    SetWindowTextString(statusLabel_, "Drop cancelled: unsupported file type.");
 }
 
 void LauncherWindow::HandleCommand(int id, int notification)
