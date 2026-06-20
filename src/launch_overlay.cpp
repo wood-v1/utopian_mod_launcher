@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace uml
 {
@@ -19,12 +20,15 @@ constexpr UINT kOverlayTickMs = 250;
 constexpr DWORD kWaitingOverlayMs = 120000;
 constexpr DWORD kVisibleOverlayMs = 10000;
 constexpr int kOverlayWidth = 440;
-constexpr int kOverlayHeight = 122;
+constexpr int kOverlayHeight = 152;
 constexpr int kOverlayMargin = 18;
+constexpr std::size_t kMaxSummaryItems = 10;
+constexpr std::size_t kMaxSummaryNameLength = 10;
 
 struct OverlayState
 {
     uint32_t processId = 0;
+    HANDLE processHandle = nullptr;
     HWND gameWindow = nullptr;
     LaunchOverlayInfo info;
     LaunchOverlayProgress progress;
@@ -87,6 +91,52 @@ std::string SanitizeStatusValue(const std::string& value)
     return sanitized;
 }
 
+std::string SanitizeStatusListValue(const std::string& value)
+{
+    std::string sanitized;
+    sanitized.reserve(value.size());
+    for (char ch : value) {
+        if (ch == '\r' || ch == '\n' || ch == '|' || ch == '\t') {
+            sanitized.push_back(' ');
+        }
+        else {
+            sanitized.push_back(ch);
+        }
+    }
+    return sanitized;
+}
+
+std::string JoinStatusList(const std::vector<std::string>& values)
+{
+    std::string joined;
+    for (const std::string& value : values) {
+        if (!joined.empty()) {
+            joined.push_back('|');
+        }
+        joined += SanitizeStatusListValue(value);
+    }
+    return joined;
+}
+
+std::vector<std::string> SplitStatusList(const std::string& value)
+{
+    std::vector<std::string> values;
+    std::string current;
+    for (char ch : value) {
+        if (ch == '|') {
+            values.push_back(current);
+            current.clear();
+        }
+        else {
+            current.push_back(ch);
+        }
+    }
+    if (!current.empty() || !value.empty()) {
+        values.push_back(current);
+    }
+    return values;
+}
+
 std::map<std::string, std::string> ReadStatusFile(const std::string& path)
 {
     std::map<std::string, std::string> values;
@@ -134,6 +184,14 @@ void RefreshProgress(OverlayState* state)
     const auto current = values.find("current");
     if (current != values.end()) {
         state->progress.current = current->second;
+    }
+    const auto dllNames = values.find("dllNames");
+    if (dllNames != values.end()) {
+        state->progress.dllModNames = SplitStatusList(dllNames->second);
+    }
+    const auto resourceNames = values.find("resourceNames");
+    if (resourceNames != values.end()) {
+        state->progress.resourceModNames = SplitStatusList(resourceNames->second);
     }
     state->progress.completedCount = ParseUInt(values, "completed", state->progress.completedCount);
     state->progress.totalCount = ParseUInt(values, "total", state->progress.totalCount);
@@ -187,6 +245,44 @@ void DrawTextLine(HDC dc, const std::string& text, int left, int top, int right)
         DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
+std::string CompactName(const std::string& name)
+{
+    if (name.size() <= kMaxSummaryNameLength) {
+        return name;
+    }
+    return name.substr(0, kMaxSummaryNameLength - 3) + "...";
+}
+
+std::string BuildSummaryList(
+    const char* label,
+    const std::vector<std::string>& names,
+    std::size_t* remainingSlots)
+{
+    if (remainingSlots == nullptr || *remainingSlots == 0 || names.empty()) {
+        return std::string(label) + ": -";
+    }
+
+    std::string line = std::string(label) + ": ";
+    std::size_t added = 0;
+    for (const std::string& name : names) {
+        if (*remainingSlots == 0) {
+            break;
+        }
+        if (added != 0) {
+            line += ", ";
+        }
+        line += CompactName(name);
+        ++added;
+        --(*remainingSlots);
+    }
+
+    if (added < names.size()) {
+        line += ", +" + std::to_string(names.size() - added);
+    }
+
+    return line;
+}
+
 void DrawOverlay(HWND window, OverlayState* state)
 {
     PAINTSTRUCT paint = {};
@@ -223,10 +319,17 @@ void DrawOverlay(HWND window, OverlayState* state)
     }
 
     if (state->progress.finished && !state->progress.failed) {
-        const std::string dllMods = "Installed " + std::to_string(state->info.dllModCount) + " DLL Mods";
-        const std::string resourceMods = "Installed " + std::to_string(state->info.resourceModCount) + " Resource Mods";
-        DrawTextLine(dc, dllMods, 16, 44, rect.right - 16);
-        DrawTextLine(dc, resourceMods, 16, 72, rect.right - 16);
+        const std::string counts = "Installed "
+            + std::to_string(state->info.dllModCount)
+            + " DLL Mods, "
+            + std::to_string(state->info.resourceModCount)
+            + " Resource Mods";
+        std::size_t remainingSlots = kMaxSummaryItems;
+        const std::string dllNames = BuildSummaryList("DLL", state->progress.dllModNames, &remainingSlots);
+        const std::string resourceNames = BuildSummaryList("RES", state->progress.resourceModNames, &remainingSlots);
+        DrawTextLine(dc, counts, 16, 42, rect.right - 16);
+        DrawTextLine(dc, dllNames, 16, 72, rect.right - 16);
+        DrawTextLine(dc, resourceNames, 16, 100, rect.right - 16);
     }
     else {
         const uint32_t remaining = state->progress.totalCount > state->progress.completedCount
@@ -307,6 +410,12 @@ LRESULT CALLBACK OverlayWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         }
 
         const DWORD now = ::GetTickCount();
+        if (state->processHandle != nullptr
+            && ::WaitForSingleObject(state->processHandle, 0) == WAIT_OBJECT_0) {
+            ::DestroyWindow(window);
+            return 0;
+        }
+
         if ((state->finalCountdownStarted && now >= state->expiresAt)
             || (!state->finalCountdownStarted && now - state->startedAt >= kWaitingOverlayMs)) {
             ::DestroyWindow(window);
@@ -333,6 +442,10 @@ LRESULT CALLBACK OverlayWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         if (state != nullptr && state->titleFont != nullptr) {
             ::DeleteObject(state->titleFont);
             state->titleFont = nullptr;
+        }
+        if (state != nullptr && state->processHandle != nullptr) {
+            ::CloseHandle(state->processHandle);
+            state->processHandle = nullptr;
         }
         ::SetWindowLongPtrA(window, GWLP_USERDATA, 0);
         ::PostQuitMessage(0);
@@ -381,6 +494,7 @@ int RunOverlayWindow(uint32_t processId, LaunchOverlayInfo info, const std::stri
 
     OverlayState state;
     state.processId = processId;
+    state.processHandle = ::OpenProcess(SYNCHRONIZE, FALSE, processId);
     state.gameWindow = FindMainWindow(processId);
     state.info = std::move(info);
     state.statusPath = statusPath;
@@ -442,6 +556,12 @@ void WriteLaunchOverlayProgress(const std::string& statusPath, const LaunchOverl
             return;
         }
         output << "current=" << SanitizeStatusValue(progress.current) << "\n";
+        if (!progress.dllModNames.empty()) {
+            output << "dllNames=" << JoinStatusList(progress.dllModNames) << "\n";
+        }
+        if (!progress.resourceModNames.empty()) {
+            output << "resourceNames=" << JoinStatusList(progress.resourceModNames) << "\n";
+        }
         output << "completed=" << progress.completedCount << "\n";
         output << "total=" << progress.totalCount << "\n";
         output << "finished=" << (progress.finished ? 1 : 0) << "\n";

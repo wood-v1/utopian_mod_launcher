@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace uml
 {
@@ -15,6 +16,8 @@ struct LaunchOverlayInfo
 struct LaunchOverlayProgress
 {
     std::string current;
+    std::vector<std::string> dllModNames;
+    std::vector<std::string> resourceModNames;
     uint32_t completedCount = 0;
     uint32_t totalCount = 0;
     bool finished = false;

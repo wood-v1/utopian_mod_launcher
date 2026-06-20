@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace uml
 {
@@ -33,15 +34,44 @@ void UpdateOverlayProgress(
     uint32_t completedCount,
     uint32_t totalCount,
     bool finished = false,
-    bool failed = false)
+    bool failed = false,
+    const std::vector<std::string>& dllModNames = std::vector<std::string>(),
+    const std::vector<std::string>& resourceModNames = std::vector<std::string>())
 {
     LaunchOverlayProgress progress;
     progress.current = current;
+    progress.dllModNames = dllModNames;
+    progress.resourceModNames = resourceModNames;
     progress.completedCount = completedCount;
     progress.totalCount = totalCount;
     progress.finished = finished;
     progress.failed = failed;
     WriteLaunchOverlayProgress(statusPath, progress);
+}
+
+std::vector<std::string> GetOverlayDllModNames(const LauncherConfig& config)
+{
+    std::vector<std::string> names;
+    names.reserve(config.mods.size());
+    for (const ModEntry& mod : config.mods) {
+        names.push_back(GetOverlayModName(mod));
+    }
+    return names;
+}
+
+std::vector<std::string> GetOverlayResourceModNames(const LauncherConfig& config)
+{
+    std::vector<std::string> names;
+    names.reserve(config.resourceMods.size());
+    for (const ResourceModEntry& mod : config.resourceMods) {
+        if (!mod.name.empty()) {
+            names.push_back(mod.name);
+        }
+        else {
+            names.push_back(mod.id);
+        }
+    }
+    return names;
 }
 }
 
@@ -154,7 +184,17 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
     overlayInfo.version = kLauncherVersion;
     overlayInfo.dllModCount = totalDllMods;
     overlayInfo.resourceModCount = static_cast<uint32_t>(config.resourceMods.size());
-    UpdateOverlayProgress(overlayStatusPath, "Starting game...", 0, totalDllMods);
+    const std::vector<std::string> overlayDllModNames = GetOverlayDllModNames(config);
+    const std::vector<std::string> overlayResourceModNames = GetOverlayResourceModNames(config);
+    UpdateOverlayProgress(
+        overlayStatusPath,
+        "Starting game...",
+        0,
+        totalDllMods,
+        false,
+        false,
+        overlayDllModNames,
+        overlayResourceModNames);
     ShowLaunchOverlayForProcess(static_cast<uint32_t>(processInfo.dwProcessId), overlayInfo, overlayStatusPath);
 
     bool ok = true;
