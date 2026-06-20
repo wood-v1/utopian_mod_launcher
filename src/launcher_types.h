@@ -44,7 +44,9 @@ struct ResourceModEntry
 {
     std::string id;
     std::string name;
+    std::string description;
     std::string manifestOwner;
+    std::vector<std::string> filesToDelete;
     InjectionStage stage = InjectionStage::Resume;
     uint32_t delayMs = 0;
 };
@@ -63,10 +65,12 @@ struct InstalledPackageEntry
 {
     std::string id;
     std::string name;
+    std::string description;
     std::string manifestOwner;
     std::string primaryDll;
     std::vector<std::string> dlls;
     std::vector<std::string> sharedDlls;
+    std::vector<std::string> filesToDelete;
 };
 
 struct InstalledModView

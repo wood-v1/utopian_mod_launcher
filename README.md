@@ -9,6 +9,18 @@ on mod load order, per-mod settings, logging, and launching the game. Use
 `GameModLauncher.exe --noui` to run the headless launch path directly.
 `--launch` is kept as a deprecated alias for old scripts.
 
+## Release bundle
+
+`release\UtopianModLauncher-1.0.zip` is laid out from the game root. To install
+the launcher into a clean Pathologic Classic HD folder, unpack the zip into:
+
+```text
+C:\Program Files (x86)\Steam\steamapps\common\Pathologic Classic HD
+```
+
+It creates `bin\Final\GameModLauncher.exe`, `bin\Final\GameModLauncher.ini`, and
+launcher assets under `bin\Final\mods\.launcher`.
+
 ## LoadOrder
 
 Mods are loaded from `Final\mods` in the exact order listed in `GameModLauncher.ini`.
@@ -18,12 +30,14 @@ Example:
 
 ```ini
 [Mods]
-LoadOrder=OynonTools.dll@suspended, PGOG.dll@engine, PPMM.dll@ui+3000
+LoadOrder=PGOG.dll@engine, PPMM.dll@ui+3000
 ```
 
-Shared DLL dependencies are still listed in `LoadOrder`, but their role is
-declared separately. This is for common hook/helper libraries that can be used by
-several mods and should not be deleted with one ordinary mod:
+Shared DLL dependencies may be listed in `LoadOrder` once installed, but their
+role is declared separately. This is for common hook/helper libraries that can be
+used by several mods and should not be deleted with one ordinary mod. A shared
+dependency can be declared in the ini before its DLL exists; it will not appear
+as an installed mod until the DLL is present in `bin\Final\mods`.
 
 ```ini
 [SharedDlls]
@@ -148,6 +162,21 @@ package contains multiple DLLs, the UI asks which additional DLLs should also be
 added to `LoadOrder`. Packages without DLLs but with files under `data` are
 installed as `Resource Mod`. The install dialog suggests the mod name from the
 archive/folder name and lets you change it before installation.
+
+Packages may include an author manifest next to the primary DLL:
+
+```ini
+[UtopianMod]
+Description=Short text shown in the launcher info box.
+FilesToDelete=data\UI\generated_or_dynamic_file.xml
+```
+
+For DLL packages the preferred path is
+`bin\Final\mods\<PrimaryDllBase>.manifest.ini`, for example
+`bin\Final\mods\StaminaSystem.manifest.ini`. `FilesToDelete` is an explicit
+cleanup list for files a mod creates or changes dynamically. Existing cleanup
+targets are backed up before install and restored on delete; missing cleanup
+targets are deleted on uninstall if the mod creates them later.
 
 After install, DLL mods are added to `LoadOrder` with the default `resume` stage.
 DLLs listed in package `[SharedDlls]` are shown as `DLL Mod Shared Dependency`;

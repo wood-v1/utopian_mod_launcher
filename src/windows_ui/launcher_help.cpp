@@ -241,6 +241,8 @@ void ShowLauncherHelpDialog(HWND owner)
         "- DLL mods are detected by bin\\Final\\mods\\SomeMod.dll.\r\n"
         "- If a DLL package contains bin\\Final\\GameModLauncher.ini, its [Mods] LoadOrder is used as an install hint.\r\n"
         "- Package [SharedDlls] Names marks helper DLLs as shared dependencies.\r\n"
+        "- Optional bin\\Final\\mods\\<ModName>.manifest.ini can provide Description and FilesToDelete.\r\n"
+        "- FilesToDelete is backed up/restored or deleted safely during uninstall.\r\n"
         "- If a DLL package contains more DLLs, the launcher shows one dependency table before install.\r\n"
         "- Non-shared dependency DLLs are grouped into one installed package.\r\n"
         "- Existing DLLs can be overwritten or skipped; skip keeps the current DLL file but can update stage/order.\r\n"
@@ -252,7 +254,7 @@ void ShowLauncherHelpDialog(HWND owner)
         "Double click a mod to open its settings and rename dialog.\r\n\r\n"
         "Save Changes\r\n"
         "- Saves load order, stages, delay, names and logging without launching the game.\r\n\r\n"
-        "When an installed mod overwrites an existing game file, the launcher keeps a backup and restores it on delete only if the file was not changed later.");
+        "When an installed mod overwrites an existing game file, the launcher keeps a backup and restores it on delete only if the file was not changed later. Author cleanup files from FilesToDelete are also backed up before install when they already exist.");
 }
 
 void ShowBackedUpFilesDialog(HWND owner, const LauncherConfig& config)
@@ -264,12 +266,12 @@ void ShowBackedUpFilesDialog(HWND owner, const LauncherConfig& config)
 void ShowBackedUpFilesAuditDialog(HWND owner, const std::vector<ManifestAuditEntry>& audit)
 {
     if (audit.empty()) {
-        ShowInfo(owner, "No backed-up overwritten vanilla files were found in installed mod manifests.");
+        ShowInfo(owner, "No backed-up overwritten or cleanup files were found in installed mod manifests.");
         return;
     }
 
     std::ostringstream message;
-    message << "Backed-up overwritten vanilla files:\r\n\r\n";
+    message << "Backed-up overwritten and cleanup files:\r\n\r\n";
     for (const ManifestAuditEntry& entry : audit) {
         message << entry.modName << "\r\n";
         message << "  " << entry.entry.relativePath << "\r\n";

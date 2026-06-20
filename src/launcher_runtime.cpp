@@ -21,30 +21,13 @@ bool ValidateLauncherConfig(const LauncherConfig& config, std::string* error)
         return false;
     }
 
-    const std::string engineModulePath = ResolveGameAdjacentPath(config.gamePath, config.engineWait.moduleName);
-    if (!FileExists(engineModulePath.c_str())) {
-        if (error) {
-            *error = "Engine stage DLL is missing: " + engineModulePath;
-        }
-        return false;
-    }
-
-    const std::string uiModulePath = ResolveGameAdjacentPath(config.gamePath, config.uiWait.moduleName);
-    if (!FileExists(uiModulePath.c_str())) {
-        if (error) {
-            *error = "UI stage DLL is missing: " + uiModulePath;
-        }
-        return false;
-    }
-
     if (config.mods.empty()) {
-        if (error) {
-            *error = "LoadOrder is empty.";
-        }
-        return false;
+        return true;
     }
 
     InjectionStage reachedStage = InjectionStage::Suspended;
+    bool needsEngineModule = false;
+    bool needsUiModule = false;
     for (const ModEntry& mod : config.mods) {
         if (!FileExists(mod.dllPath.c_str())) {
             if (error) {
@@ -62,6 +45,33 @@ bool ValidateLauncherConfig(const LauncherConfig& config, std::string* error)
 
         if (static_cast<int>(mod.stage) > static_cast<int>(reachedStage)) {
             reachedStage = mod.stage;
+        }
+
+        if (mod.stage == InjectionStage::Engine || mod.stage == InjectionStage::Ui) {
+            needsEngineModule = true;
+        }
+        if (mod.stage == InjectionStage::Ui) {
+            needsUiModule = true;
+        }
+    }
+
+    if (needsEngineModule) {
+        const std::string engineModulePath = ResolveGameAdjacentPath(config.gamePath, config.engineWait.moduleName);
+        if (!FileExists(engineModulePath.c_str())) {
+            if (error) {
+                *error = "Engine stage DLL is missing: " + engineModulePath;
+            }
+            return false;
+        }
+    }
+
+    if (needsUiModule) {
+        const std::string uiModulePath = ResolveGameAdjacentPath(config.gamePath, config.uiWait.moduleName);
+        if (!FileExists(uiModulePath.c_str())) {
+            if (error) {
+                *error = "UI stage DLL is missing: " + uiModulePath;
+            }
+            return false;
         }
     }
 

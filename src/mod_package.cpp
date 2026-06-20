@@ -21,7 +21,9 @@ namespace
 enum class InstallAction
 {
     Created,
-    Overwritten
+    Overwritten,
+    CleanupDelete,
+    CleanupRestore
 };
 
 struct InstallManifestEntry
@@ -224,12 +226,32 @@ std::string GetBackupRelativePath(const std::string& manifestOwner, const std::s
 
 const char* ActionToString(InstallAction action)
 {
-    return action == InstallAction::Overwritten ? "overwritten" : "created";
+    switch (action) {
+    case InstallAction::Overwritten:
+        return "overwritten";
+    case InstallAction::CleanupDelete:
+        return "cleanup-delete";
+    case InstallAction::CleanupRestore:
+        return "cleanup-restore";
+    case InstallAction::Created:
+    default:
+        return "created";
+    }
 }
 
 ManifestInstallAction ToPublicAction(InstallAction action)
 {
-    return action == InstallAction::Overwritten ? ManifestInstallAction::Overwritten : ManifestInstallAction::Created;
+    switch (action) {
+    case InstallAction::Overwritten:
+        return ManifestInstallAction::Overwritten;
+    case InstallAction::CleanupDelete:
+        return ManifestInstallAction::CleanupDelete;
+    case InstallAction::CleanupRestore:
+        return ManifestInstallAction::CleanupRestore;
+    case InstallAction::Created:
+    default:
+        return ManifestInstallAction::Created;
+    }
 }
 
 bool ParseAction(const std::string& value, InstallAction* action)
@@ -244,6 +266,14 @@ bool ParseAction(const std::string& value, InstallAction* action)
     }
     if (value == "overwritten") {
         *action = InstallAction::Overwritten;
+        return true;
+    }
+    if (value == "cleanup-delete") {
+        *action = InstallAction::CleanupDelete;
+        return true;
+    }
+    if (value == "cleanup-restore") {
+        *action = InstallAction::CleanupRestore;
         return true;
     }
     return false;
@@ -827,7 +857,8 @@ bool InstallModPackageFiles(
     const std::string& manifestOwner,
     PackageInstallResult* result,
     std::string* error,
-    const std::vector<std::string>& skippedRelativePaths)
+    const std::vector<std::string>& skippedRelativePaths,
+    const std::vector<std::string>& cleanupRelativePaths)
 {
     if (result) {
         *result = PackageInstallResult();
@@ -861,7 +892,27 @@ bool InstallModPackageFiles(
         skippedPathKeys.insert(ToLower(normalized));
     }
 
+    std::vector<std::string> cleanupPaths;
+    std::set<std::string> cleanupPathKeys;
+    for (const std::string& cleanupRelativePath : cleanupRelativePaths) {
+        const std::string normalized = NormalizeRelativePath(Trim(cleanupRelativePath));
+        if (normalized.empty()) {
+            continue;
+        }
+        if (!IsSafeRelativePath(normalized)) {
+            if (error) {
+                *error = "Unsafe cleanup package path: " + cleanupRelativePath;
+            }
+            return false;
+        }
+        const std::string key = ToLower(normalized);
+        if (cleanupPathKeys.insert(key).second) {
+            cleanupPaths.push_back(normalized);
+        }
+    }
+
     std::vector<InstallManifestEntry> manifestEntries;
+    std::set<std::string> manifestEntryKeys;
     for (const PackageFile& file : files) {
         const std::string normalizedRelativePath = NormalizeRelativePath(file.relativePath);
         if (skippedPathKeys.find(ToLower(normalizedRelativePath)) != skippedPathKeys.end()) {
@@ -917,9 +968,45 @@ bool InstallModPackageFiles(
             return false;
         }
         manifestEntries.push_back(entry);
+        manifestEntryKeys.insert(ToLower(entry.relativePath));
         if (result) {
             result->installedRelativePaths.push_back(entry.relativePath);
         }
+    }
+
+    for (const std::string& cleanupPath : cleanupPaths) {
+        if (manifestEntryKeys.find(ToLower(cleanupPath)) != manifestEntryKeys.end()) {
+            continue;
+        }
+
+        InstallManifestEntry entry;
+        entry.relativePath = cleanupPath;
+        const std::string targetPath = JoinPath(gameRoot, cleanupPath);
+        if (FileExists(targetPath.c_str())) {
+            entry.action = InstallAction::CleanupRestore;
+            if (!ComputeFileSha256(targetPath, &entry.beforeSha256, error)) {
+                return false;
+            }
+            entry.backupRelativePath = GetBackupRelativePath(manifestOwner, entry.relativePath);
+            const std::string backupPath = JoinPath(gameRoot, entry.backupRelativePath);
+            if (!CreateDirectoryRecursive(DirectoryName(backupPath))) {
+                if (error) {
+                    *error = "Failed to create backup directory for " + backupPath;
+                }
+                return false;
+            }
+            if (::CopyFileA(targetPath.c_str(), backupPath.c_str(), FALSE) == FALSE) {
+                if (error) {
+                    *error = "Failed to backup cleanup file before install: " + targetPath;
+                }
+                return false;
+            }
+        }
+        else {
+            entry.action = InstallAction::CleanupDelete;
+        }
+
+        manifestEntries.push_back(entry);
     }
 
     if (!WriteInstallManifestEntries(gameRoot, manifestOwner, manifestEntries, error)) {
@@ -1042,7 +1129,8 @@ bool DeleteInstalledModFiles(
                 return false;
             }
 
-            if (protectedPathKeys.find(ToLower(relativePath)) != protectedPathKeys.end()) {
+            const bool isProtectedByAnotherManifest = protectedPathKeys.find(ToLower(relativePath)) != protectedPathKeys.end();
+            if (isProtectedByAnotherManifest && entry.action != InstallAction::Overwritten) {
                 if (result) {
                     result->skippedRelativePaths.push_back(relativePath);
                 }
@@ -1050,6 +1138,36 @@ bool DeleteInstalledModFiles(
             }
 
             const std::string targetPath = JoinPath(gameRoot, relativePath);
+            if (entry.action == InstallAction::CleanupDelete) {
+                if (FileExists(targetPath.c_str()) && !DeleteFileIfExists(targetPath, error)) {
+                    return false;
+                }
+                if (result) {
+                    result->deletedRelativePaths.push_back(relativePath);
+                }
+                continue;
+            }
+
+            if (entry.action == InstallAction::CleanupRestore) {
+                const std::string backupPath = JoinPath(gameRoot, entry.backupRelativePath);
+                if (!FileExists(backupPath.c_str())) {
+                    if (result) {
+                        result->skippedRelativePaths.push_back(relativePath);
+                    }
+                    continue;
+                }
+                if (FileExists(targetPath.c_str()) && !DeleteFileIfExists(targetPath, error)) {
+                    return false;
+                }
+                if (!MoveFileIfExists(backupPath, targetPath, error)) {
+                    return false;
+                }
+                if (result) {
+                    result->restoredRelativePaths.push_back(relativePath);
+                }
+                continue;
+            }
+
             const bool targetExists = FileExists(targetPath.c_str());
             bool currentMatchesInstalled = !targetExists;
             if (targetExists) {

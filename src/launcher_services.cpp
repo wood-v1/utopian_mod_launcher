@@ -109,10 +109,37 @@ std::string GetPackageDisplayName(const InstalledPackageEntry& package)
 SharedDllEntry* FindSharedDll(LauncherConfig* config, const std::string& dllName);
 const SharedDllEntry* FindSharedDll(const LauncherConfig& config, const std::string& dllName);
 
+bool IsBuiltInSharedDllName(const std::string& dllName)
+{
+    return EqualsNoCase(dllName, "OynonTools.dll");
+}
+
+struct AuthorModManifest
+{
+    std::string description;
+    std::vector<std::string> filesToDelete;
+};
+
+bool StartsWithNoCase(const std::string& value, const std::string& prefix)
+{
+    return value.size() >= prefix.size()
+        && _strnicmp(value.c_str(), prefix.c_str(), prefix.size()) == 0;
+}
+
+bool HasExtensionNoCase(const std::string& value, const char* extension)
+{
+    const std::size_t extensionLength = std::strlen(extension);
+    return value.size() >= extensionLength
+        && _stricmp(value.c_str() + value.size() - extensionLength, extension) == 0;
+}
+
 std::string GetDllManifestOwner(const LauncherConfig& config, const std::string& dllName)
 {
     if (const SharedDllEntry* sharedDll = FindSharedDll(config, dllName)) {
         return sharedDll->manifestOwner.empty() ? "shared-" + sharedDll->dllName : sharedDll->manifestOwner;
+    }
+    if (IsBuiltInSharedDllName(dllName)) {
+        return "shared-" + dllName;
     }
     if (const InstalledPackageEntry* package = FindPackageByDll(config, dllName)) {
         return package->manifestOwner.empty() ? package->id : package->manifestOwner;
@@ -133,6 +160,9 @@ std::string GetDllOwnerDisplayName(const LauncherConfig& config, const ModEntry&
 
 bool IsSharedDllName(const LauncherConfig& config, const std::string& dllName)
 {
+    if (IsBuiltInSharedDllName(dllName)) {
+        return true;
+    }
     for (const SharedDllEntry& sharedDll : config.sharedDlls) {
         if (EqualsNoCase(sharedDll.dllName, dllName)) {
             return true;
@@ -187,6 +217,80 @@ void RemoveValueNoCase(std::vector<std::string>* values, const std::string& valu
             return EqualsNoCase(existing, value);
         }),
         values->end());
+}
+
+bool ValidateAuthorCleanupPaths(const std::vector<std::string>& paths, std::vector<std::string>* normalizedPaths, std::string* error)
+{
+    if (normalizedPaths) {
+        normalizedPaths->clear();
+    }
+
+    std::set<std::string> pathKeys;
+    for (const std::string& path : paths) {
+        const std::string normalized = NormalizeRelativePath(Trim(path));
+        if (normalized.empty()) {
+            continue;
+        }
+        if (!IsSafeRelativePath(normalized)) {
+            if (error) {
+                *error = "Unsafe FilesToDelete path in author manifest: " + path;
+            }
+            return false;
+        }
+        const std::string key = ToLower(normalized);
+        if (pathKeys.insert(key).second && normalizedPaths) {
+            normalizedPaths->push_back(normalized);
+        }
+    }
+
+    return true;
+}
+
+bool FindAuthorManifestPath(const std::vector<PackageFile>& files, const std::string& primaryDllName, std::string* sourcePath)
+{
+    if (!sourcePath) {
+        return false;
+    }
+
+    sourcePath->clear();
+    if (!Trim(primaryDllName).empty()) {
+        const std::string primaryManifestPath = JoinPath(
+            JoinPath(JoinPath("bin", "Final"), "mods"),
+            ReplaceExtension(primaryDllName, ".manifest.ini"));
+        for (const PackageFile& file : files) {
+            if (EqualsNoCase(file.relativePath, primaryManifestPath)) {
+                *sourcePath = file.sourcePath;
+                return true;
+            }
+        }
+    }
+
+    for (const PackageFile& file : files) {
+        const std::string normalized = NormalizeRelativePath(file.relativePath);
+        if (StartsWithNoCase(normalized, "bin\\Final\\mods\\") && HasExtensionNoCase(normalized, ".manifest.ini")) {
+            *sourcePath = file.sourcePath;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool LoadAuthorModManifest(const std::vector<PackageFile>& files, const std::string& primaryDllName, AuthorModManifest* manifest, std::string* error)
+{
+    if (!manifest) {
+        return false;
+    }
+
+    *manifest = AuthorModManifest();
+    std::string manifestPath;
+    if (!FindAuthorManifestPath(files, primaryDllName, &manifestPath)) {
+        return true;
+    }
+
+    manifest->description = Trim(ReadIniStringFromFile("UtopianMod", "Description", "", manifestPath));
+    const std::vector<std::string> rawFilesToDelete = SplitLoadOrderList(ReadIniStringFromFile("UtopianMod", "FilesToDelete", "", manifestPath));
+    return ValidateAuthorCleanupPaths(rawFilesToDelete, &manifest->filesToDelete, error);
 }
 
 void AppendMatch(std::vector<ModMatch>* matches, ModType type, std::size_t index)
@@ -248,6 +352,30 @@ std::map<std::string, std::vector<ManifestOwnerInfo>> BuildManifestPathOwners(co
     }
     return pathOwners;
 }
+
+std::vector<std::string> GetOtherManifestRelativePaths(const LauncherConfig& config, const std::string& gameRoot, const std::string& currentOwner)
+{
+    std::vector<std::string> protectedPaths;
+    std::set<std::string> protectedPathKeys;
+    for (const ManifestOwnerInfo& owner : GetManifestOwners(config)) {
+        if (EqualsNoCase(owner.owner, currentOwner)) {
+            continue;
+        }
+
+        std::vector<std::string> relativePaths;
+        if (!ReadInstallManifest(gameRoot, owner.owner, &relativePaths)) {
+            continue;
+        }
+        for (const std::string& relativePath : relativePaths) {
+            const std::string normalized = NormalizeRelativePath(relativePath);
+            const std::string key = ToLower(normalized);
+            if (protectedPathKeys.insert(key).second) {
+                protectedPaths.push_back(normalized);
+            }
+        }
+    }
+    return protectedPaths;
+}
 }
 
 std::string GetDllModDisplayName(const ModEntry& mod)
@@ -265,6 +393,9 @@ std::string GetSharedDllDisplayName(const LauncherConfig& config, const std::str
     if (const SharedDllEntry* sharedDll = FindSharedDll(config, dllName)) {
         return sharedDll->name.empty() ? sharedDll->dllName : sharedDll->name;
     }
+    if (IsBuiltInSharedDllName(dllName)) {
+        return ReplaceExtension(dllName, "");
+    }
     return dllName;
 }
 
@@ -272,6 +403,9 @@ std::string GetSharedDllManifestOwner(const LauncherConfig& config, const std::s
 {
     if (const SharedDllEntry* sharedDll = FindSharedDll(config, dllName)) {
         return sharedDll->manifestOwner.empty() ? "shared-" + sharedDll->dllName : sharedDll->manifestOwner;
+    }
+    if (IsBuiltInSharedDllName(dllName)) {
+        return "shared-" + dllName;
     }
     return dllName;
 }
@@ -739,6 +873,11 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
     const std::string packageId = isDllMod ? MakeUniquePackageId(*config, gameRoot, displayName) : std::string();
     const std::string manifestOwner = isDllMod ? packageId : MakeUniqueResourceModId(*config, gameRoot, displayName);
 
+    AuthorModManifest authorManifest;
+    if (!LoadAuthorModManifest(files, isDllMod ? dllName : std::string(), &authorManifest, error)) {
+        return false;
+    }
+
     std::vector<std::string> selectedDllNames;
     std::vector<std::string> skippedRelativePaths;
     if (isDllMod) {
@@ -869,7 +1008,7 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
     }
 
     PackageInstallResult packageResult;
-    if (!InstallModPackageFiles(files, gameRoot, manifestOwner, &packageResult, error, skippedRelativePaths)) {
+    if (!InstallModPackageFiles(files, gameRoot, manifestOwner, &packageResult, error, skippedRelativePaths, authorManifest.filesToDelete)) {
         return false;
     }
 
@@ -923,17 +1062,21 @@ bool InstallModFromPackage(LauncherConfig* config, const InstallModOptions& opti
         InstalledPackageEntry package;
         package.id = packageId;
         package.name = displayName.empty() ? packageId : displayName;
+        package.description = authorManifest.description;
         package.manifestOwner = manifestOwner;
         package.primaryDll = dllName;
         package.dlls = packageDlls;
         package.sharedDlls = packageSharedDlls;
+        package.filesToDelete = authorManifest.filesToDelete;
         config->packages.push_back(package);
     }
     else {
         ResourceModEntry entry;
         entry.id = manifestOwner;
         entry.name = displayName.empty() ? manifestOwner : displayName;
+        entry.description = authorManifest.description;
         entry.manifestOwner = manifestOwner;
+        entry.filesToDelete = authorManifest.filesToDelete;
         entry.stage = InjectionStage::Resume;
         entry.delayMs = 0;
         config->resourceMods.push_back(entry);
@@ -955,6 +1098,7 @@ bool DeleteInstalledMod(LauncherConfig* config, const ModMatch& match, ModDelete
     }
 
     const std::string manifestOwner = GetModManifestOwner(*config, match);
+    const std::string gameRoot = GetDefaultGameRootDirectory();
     const bool isDllMod = match.type == ModType::Dll || match.type == ModType::DllDependency || match.type == ModType::SharedDll;
     const bool isPackageMember = match.type == ModType::Dll || match.type == ModType::DllDependency;
     const InstalledPackageEntry* matchedPackage = isPackageMember ? FindPackageByDll(*config, config->mods[match.index].dllName) : nullptr;
@@ -974,19 +1118,19 @@ bool DeleteInstalledMod(LauncherConfig* config, const ModMatch& match, ModDelete
         }
     }
 
-    std::vector<std::string> protectedRelativePaths;
+    std::vector<std::string> protectedRelativePaths = GetOtherManifestRelativePaths(*config, gameRoot, manifestOwner);
     if (isDllMod) {
         for (std::size_t i = 0; i < config->mods.size(); ++i) {
             const bool packageMemberToDelete = matchedPackage && ContainsNoCase(packageToDelete.dlls, config->mods[i].dllName);
             if (i == match.index || packageMemberToDelete) {
                 continue;
             }
-            protectedRelativePaths.push_back(GetDllRelativePath(config->mods[i].dllName));
-            protectedRelativePaths.push_back(GetDllIniRelativePath(config->mods[i].dllName));
+            AddUniqueNoCase(&protectedRelativePaths, GetDllRelativePath(config->mods[i].dllName));
+            AddUniqueNoCase(&protectedRelativePaths, GetDllIniRelativePath(config->mods[i].dllName));
         }
     }
 
-    if (!DeleteInstalledModFiles(GetDefaultGameRootDirectory(), manifestOwner, isDllMod, result, error, protectedRelativePaths)) {
+    if (!DeleteInstalledModFiles(gameRoot, manifestOwner, isDllMod, result, error, protectedRelativePaths)) {
         return false;
     }
 
@@ -1125,7 +1269,7 @@ std::vector<ManifestAuditEntry> GetVanillaFileAudit(const LauncherConfig& config
         }
 
         for (const InstallManifestEntryInfo& entry : entries) {
-            if (entry.action != ManifestInstallAction::Overwritten) {
+            if (entry.action != ManifestInstallAction::Overwritten && entry.action != ManifestInstallAction::CleanupRestore) {
                 continue;
             }
             if (backedUpOnly && entry.backupRelativePath.empty()) {

@@ -29,7 +29,9 @@ struct ModDeleteResult
 enum class ManifestInstallAction
 {
     Created,
-    Overwritten
+    Overwritten,
+    CleanupDelete,
+    CleanupRestore
 };
 
 enum class ManifestCurrentState
@@ -82,7 +84,8 @@ bool InstallModPackageFiles(
     const std::string& manifestOwner,
     PackageInstallResult* result,
     std::string* error,
-    const std::vector<std::string>& skippedRelativePaths = {});
+    const std::vector<std::string>& skippedRelativePaths = {},
+    const std::vector<std::string>& cleanupRelativePaths = {});
 bool InstallModPackageFromDirectory(
     const std::string& packageRoot,
     const std::string& gameRoot,

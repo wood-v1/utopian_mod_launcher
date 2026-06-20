@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <sstream>
 
 namespace uml
@@ -92,6 +93,52 @@ ModEntry* FindLoadedMod(std::vector<ModEntry>* mods, const std::string& dllName)
     }
     return nullptr;
 }
+
+bool ShouldMaterializeSharedDllMod(const std::string& dllName)
+{
+    return FileExists(ResolveModsPath(dllName).c_str());
+}
+
+bool ContainsNoCase(const std::vector<std::string>& values, const std::string& value)
+{
+    for (const std::string& existing : values) {
+        if (_stricmp(existing.c_str(), value.c_str()) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsBuiltInSharedDllName(const std::string& dllName)
+{
+    return _stricmp(dllName.c_str(), "OynonTools.dll") == 0;
+}
+
+void RemoveMissingSharedDllMods(LauncherConfig* config)
+{
+    if (!config) {
+        return;
+    }
+
+    std::vector<std::string> sharedDllNames;
+    for (const SharedDllEntry& sharedDll : config->sharedDlls) {
+        sharedDllNames.push_back(sharedDll.dllName);
+    }
+    for (const InstalledPackageEntry& package : config->packages) {
+        for (const std::string& sharedDllName : package.sharedDlls) {
+            if (!ContainsNoCase(sharedDllNames, sharedDllName)) {
+                sharedDllNames.push_back(sharedDllName);
+            }
+        }
+    }
+
+    config->mods.erase(
+        std::remove_if(config->mods.begin(), config->mods.end(), [&sharedDllNames](const ModEntry& mod) {
+            const bool shared = IsBuiltInSharedDllName(mod.dllName) || ContainsNoCase(sharedDllNames, mod.dllName);
+            return shared && !FileExists(ResolveModsPath(mod.dllName).c_str());
+        }),
+        config->mods.end());
+}
 }
 
 std::string ReadIniStringFromFile(const char* section, const char* key, const char* defaultValue, const std::string& iniPath)
@@ -168,7 +215,7 @@ bool LoadLauncherConfig(const std::string& iniPath, LauncherConfig* config, std:
                 loadOrderEntry->name = entry.name.empty() ? trimmedDllName : entry.name;
             }
         }
-        else {
+        else if (ShouldMaterializeSharedDllMod(trimmedDllName)) {
             ModEntry mod;
             mod.dllName = trimmedDllName;
             mod.dllPath = ResolveModsPath(trimmedDllName);
@@ -193,12 +240,16 @@ bool LoadLauncherConfig(const std::string& iniPath, LauncherConfig* config, std:
         InstalledPackageEntry entry;
         entry.id = trimmedId;
         entry.name = ReadIniStringFromFile(section.c_str(), "Name", trimmedId.c_str(), iniPath);
+        entry.description = ReadIniStringFromFile(section.c_str(), "Description", "", iniPath);
         entry.manifestOwner = ReadIniStringFromFile(section.c_str(), "Manifest", trimmedId.c_str(), iniPath);
         entry.primaryDll = ReadIniStringFromFile(section.c_str(), "PrimaryDll", "", iniPath);
         entry.dlls = SplitLoadOrderList(ReadIniStringFromFile(section.c_str(), "Dlls", "", iniPath));
         entry.sharedDlls = SplitLoadOrderList(ReadIniStringFromFile(section.c_str(), "SharedDlls", "", iniPath));
+        entry.filesToDelete = SplitLoadOrderList(ReadIniStringFromFile(section.c_str(), "FilesToDelete", "", iniPath));
         loaded.packages.push_back(entry);
     }
+
+    RemoveMissingSharedDllMods(&loaded);
 
     const std::string resourceOrder = ReadIniStringFromFile("ResourceMods", "Order", "", iniPath);
     for (const std::string& id : SplitResourceModOrder(resourceOrder)) {
@@ -206,7 +257,9 @@ bool LoadLauncherConfig(const std::string& iniPath, LauncherConfig* config, std:
         ResourceModEntry entry;
         entry.id = id;
         entry.name = ReadIniStringFromFile(section.c_str(), "Name", id.c_str(), iniPath);
+        entry.description = ReadIniStringFromFile(section.c_str(), "Description", "", iniPath);
         entry.manifestOwner = ReadIniStringFromFile(section.c_str(), "Manifest", id.c_str(), iniPath);
+        entry.filesToDelete = SplitLoadOrderList(ReadIniStringFromFile(section.c_str(), "FilesToDelete", "", iniPath));
         entry.stage = InjectionStage::Resume;
         entry.delayMs = 0;
 
@@ -271,18 +324,22 @@ bool SaveLauncherConfig(const std::string& iniPath, const LauncherConfig& config
     for (const InstalledPackageEntry& package : config.packages) {
         const std::string section = "Package:" + package.id;
         ok = ok && WriteIniStringToFile(section.c_str(), "Name", package.name.empty() ? package.id : package.name, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "Description", package.description, iniPath);
         ok = ok && WriteIniStringToFile(section.c_str(), "Manifest", package.manifestOwner.empty() ? package.id : package.manifestOwner, iniPath);
         ok = ok && WriteIniStringToFile(section.c_str(), "PrimaryDll", package.primaryDll, iniPath);
         ok = ok && WriteIniStringToFile(section.c_str(), "Dlls", SerializeStringList(package.dlls), iniPath);
         ok = ok && WriteIniStringToFile(section.c_str(), "SharedDlls", SerializeStringList(package.sharedDlls), iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "FilesToDelete", SerializeStringList(package.filesToDelete), iniPath);
     }
 
     for (const ResourceModEntry& mod : config.resourceMods) {
         const std::string section = "ResourceMod:" + mod.id;
         ok = ok && WriteIniStringToFile(section.c_str(), "Name", mod.name, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "Description", mod.description, iniPath);
         ok = ok && WriteIniStringToFile(section.c_str(), "Stage", GetStageName(mod.stage), iniPath);
         ok = ok && WriteIniStringToFile(section.c_str(), "DelayMs", Uint32ToString(mod.delayMs), iniPath);
         ok = ok && WriteIniStringToFile(section.c_str(), "Manifest", mod.manifestOwner.empty() ? mod.id : mod.manifestOwner, iniPath);
+        ok = ok && WriteIniStringToFile(section.c_str(), "FilesToDelete", SerializeStringList(mod.filesToDelete), iniPath);
     }
 
     if (!ok && error) {

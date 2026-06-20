@@ -97,6 +97,32 @@ std::vector<std::string> GetPackageDependencyDlls(const InstalledPackageEntry& p
     return dependencies;
 }
 
+std::string GetDescriptionForView(const LauncherConfig& config, const InstalledModView& view)
+{
+    if (view.type == ModType::Resource) {
+        return config.resourceMods[view.index].description;
+    }
+    if (view.type == ModType::Dll || view.type == ModType::DllDependency) {
+        const ModEntry& mod = config.mods[view.index];
+        const InstalledPackageEntry* package = FindPackageByDll(config, mod.dllName);
+        return package ? package->description : std::string();
+    }
+    return std::string();
+}
+
+std::vector<std::string> GetCleanupFilesForView(const LauncherConfig& config, const InstalledModView& view)
+{
+    if (view.type == ModType::Resource) {
+        return config.resourceMods[view.index].filesToDelete;
+    }
+    if (view.type == ModType::Dll || view.type == ModType::DllDependency) {
+        const ModEntry& mod = config.mods[view.index];
+        const InstalledPackageEntry* package = FindPackageByDll(config, mod.dllName);
+        return package ? package->filesToDelete : std::vector<std::string>();
+    }
+    return std::vector<std::string>();
+}
+
 std::string BuildDllRelationshipStatus(const LauncherConfig& config, const ModEntry& mod, ModType type)
 {
     if (type == ModType::SharedDll) {
@@ -241,6 +267,11 @@ std::string BuildModRelationshipDetails(const LauncherConfig& config, const Inst
     std::ostringstream text;
     text << BuildModRelationshipStatus(config, view) << "\r\n";
 
+    const std::string description = GetDescriptionForView(config, view);
+    if (!Trim(description).empty()) {
+        text << "\r\nDescription:\r\n" << description << "\r\n";
+    }
+
     if (view.type == ModType::Dll || view.type == ModType::DllDependency) {
         const ModEntry& mod = config.mods[view.index];
         const InstalledPackageEntry* package = FindPackageByDll(config, mod.dllName);
@@ -270,6 +301,14 @@ std::string BuildModRelationshipDetails(const LauncherConfig& config, const Inst
         }
     }
 
+    const std::vector<std::string> cleanupFiles = GetCleanupFilesForView(config, view);
+    if (!cleanupFiles.empty()) {
+        text << "\r\nCleanup files:\r\n";
+        for (const std::string& cleanupFile : cleanupFiles) {
+            text << ToForwardSlashes(cleanupFile) << "\r\n";
+        }
+    }
+
     return text.str();
 }
 
@@ -289,13 +328,18 @@ InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const I
 
     std::ostringstream text;
     text << BuildModRelationshipDetails(config, view) << "\r\nInstalled files:\r\n";
+    uint32_t installedFileCount = 0;
     for (const InstallManifestEntryInfo& entry : entries) {
+        if (entry.action == ManifestInstallAction::CleanupDelete || entry.action == ManifestInstallAction::CleanupRestore) {
+            continue;
+        }
         text << ToForwardSlashes(entry.relativePath) << "\r\n";
+        ++installedFileCount;
     }
 
     return {
         text.str(),
-        "Showing " + Uint32ToString(static_cast<uint32_t>(entries.size())) + " installed file(s) for " + modName + ".",
+        "Showing " + Uint32ToString(installedFileCount) + " installed file(s) for " + modName + ".",
         true};
 }
 }

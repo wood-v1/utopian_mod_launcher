@@ -99,7 +99,9 @@ bool RunSelfTests()
     ResourceModEntry resourceConfigEntry;
     resourceConfigEntry.id = "resource_pack";
     resourceConfigEntry.name = "Resource Pack";
+    resourceConfigEntry.description = "Resource description";
     resourceConfigEntry.manifestOwner = "resource_pack";
+    resourceConfigEntry.filesToDelete.push_back(JoinPath(JoinPath("data", "UI"), "generated.xml"));
     resourceConfigEntry.stage = InjectionStage::Ui;
     resourceConfigEntry.delayMs = 250;
     config.resourceMods.push_back(resourceConfigEntry);
@@ -108,6 +110,8 @@ bool RunSelfTests()
     require(LoadLauncherConfig(iniPath, &loadedResourceConfig, &error), "load resource mod config");
     require(loadedResourceConfig.resourceMods.size() == 1, "resource mod count");
     require(loadedResourceConfig.resourceMods[0].name == "Resource Pack", "resource mod name");
+    require(loadedResourceConfig.resourceMods[0].description == "Resource description", "resource mod description");
+    require(loadedResourceConfig.resourceMods[0].filesToDelete.size() == 1, "resource mod cleanup count");
     require(loadedResourceConfig.resourceMods[0].stage == InjectionStage::Ui, "resource mod stage");
     require(loadedResourceConfig.resourceMods[0].delayMs == 250, "resource mod delay");
     ModMatch renameMatch{ModType::Resource, 0};
@@ -132,18 +136,27 @@ bool RunSelfTests()
     require(loadedSharedConfig.sharedDlls.size() == 1, "shared dll count");
     require(IsSharedDll(loadedSharedConfig, "OynonTools.dll"), "shared dll role");
     require(GetSharedDllManifestOwner(loadedSharedConfig, "OynonTools.dll") == "shared-OynonTools.dll", "shared dll manifest owner");
+    bool loadedMissingSharedDll = false;
+    for (const ModEntry& mod : loadedSharedConfig.mods) {
+        loadedMissingSharedDll = loadedMissingSharedDll || mod.dllName == "OynonTools.dll";
+    }
+    require(!loadedMissingSharedDll, "missing shared dll is not materialized as installed mod");
+    LauncherConfig manualSharedConfig = loadedSharedConfig;
+    manualSharedConfig.mods.insert(manualSharedConfig.mods.begin(), sharedLoadOrderEntry);
     ModMatch sharedDeleteMatch{ModType::SharedDll, 0};
     ModDeleteResult blockedDeleteResult;
-    require(!DeleteInstalledMod(&loadedSharedConfig, sharedDeleteMatch, &blockedDeleteResult, &error), "shared dll required-by blocks delete");
+    require(!DeleteInstalledMod(&manualSharedConfig, sharedDeleteMatch, &blockedDeleteResult, &error), "shared dll required-by blocks delete");
 
     InstalledPackageEntry packageConfigEntry;
     packageConfigEntry.id = "stamina-system";
     packageConfigEntry.name = "Stamina System";
+    packageConfigEntry.description = "Stamina package description";
     packageConfigEntry.manifestOwner = "stamina-system";
     packageConfigEntry.primaryDll = "StaminaSystem.dll";
     packageConfigEntry.dlls.push_back("PPMM.dll");
     packageConfigEntry.dlls.push_back("StaminaSystem.dll");
     packageConfigEntry.sharedDlls.push_back("OynonTools.dll");
+    packageConfigEntry.filesToDelete.push_back(JoinPath(JoinPath("data", "UI"), "playerstat_base.xml"));
     loadedSharedConfig.packages.push_back(packageConfigEntry);
     ModEntry ppmmPackageEntry;
     require(ParseModEntry("PPMM.dll@engine", &ppmmPackageEntry), "parse package dependency");
@@ -155,11 +168,25 @@ bool RunSelfTests()
     LauncherConfig loadedPackageConfig;
     require(LoadLauncherConfig(iniPath, &loadedPackageConfig, &error), "load package config");
     require(loadedPackageConfig.packages.size() == 1, "package config count");
+    require(loadedPackageConfig.packages[0].description == "Stamina package description", "package description");
+    require(loadedPackageConfig.packages[0].filesToDelete.size() == 1, "package cleanup count");
     require(GetDllModType(loadedPackageConfig, "StaminaSystem.dll") == ModType::Dll, "package primary role");
     require(GetDllModType(loadedPackageConfig, "PPMM.dll") == ModType::DllDependency, "package dependency role");
     require(GetDllModType(loadedPackageConfig, "OynonTools.dll") == ModType::SharedDll, "package shared role");
-    ModMatch packagePrimaryMatch{ModType::Dll, 5};
-    ModMatch packageDependencyMatch{ModType::DllDependency, 4};
+    std::size_t packagePrimaryIndex = loadedPackageConfig.mods.size();
+    std::size_t packageDependencyIndex = loadedPackageConfig.mods.size();
+    for (std::size_t i = 0; i < loadedPackageConfig.mods.size(); ++i) {
+        if (loadedPackageConfig.mods[i].dllName == "StaminaSystem.dll") {
+            packagePrimaryIndex = i;
+        }
+        if (loadedPackageConfig.mods[i].dllName == "PPMM.dll") {
+            packageDependencyIndex = i;
+        }
+    }
+    require(packagePrimaryIndex < loadedPackageConfig.mods.size(), "package primary index found");
+    require(packageDependencyIndex < loadedPackageConfig.mods.size(), "package dependency index found");
+    ModMatch packagePrimaryMatch{ModType::Dll, packagePrimaryIndex};
+    ModMatch packageDependencyMatch{ModType::DllDependency, packageDependencyIndex};
     require(GetModManifestOwner(loadedPackageConfig, packagePrimaryMatch) == "stamina-system", "package primary manifest owner");
     require(GetModManifestOwner(loadedPackageConfig, packageDependencyMatch) == "stamina-system", "package dependency manifest owner");
 
@@ -254,6 +281,20 @@ bool RunSelfTests()
     require(hintEntries[1].sharedDependency, "package marks shared dependency");
     require(hintEntries[0].displayName == "Hint B", "package mod display name hint");
 
+    const std::string builtInSharedPackageRoot = JoinPath(testRoot, "builtin_shared_package");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(JoinPath(builtInSharedPackageRoot, "bin"), "Final"), "mods")), "create builtin shared package mods dir");
+    require(WriteFileText(JoinPath(JoinPath(JoinPath(JoinPath(builtInSharedPackageRoot, "bin"), "Final"), "mods"), "OynonTools.dll"), "shared"), "write builtin shared package oynon");
+    require(WriteFileText(JoinPath(JoinPath(JoinPath(JoinPath(builtInSharedPackageRoot, "bin"), "Final"), "mods"), "StaminaSystem.dll"), "dll"), "write builtin shared package stamina");
+    require(EnumeratePackageFiles(builtInSharedPackageRoot, &packageFiles, &error), "enumerate builtin shared package");
+    const std::vector<PackageDllInstallHint> builtInSharedHints = GetPackageDllInstallHintsForGameRoot(LauncherConfig(), builtInSharedPackageRoot, packageFiles, gameRoot, nullptr);
+    bool foundBuiltInOynonShared = false;
+    for (const PackageDllInstallHint& hint : builtInSharedHints) {
+        if (hint.dllName == "OynonTools.dll") {
+            foundBuiltInOynonShared = hint.sharedDependency;
+        }
+    }
+    require(foundBuiltInOynonShared, "OynonTools package dll is always shared dependency");
+
     const std::string skipGameRoot = JoinPath(testRoot, "skip_game");
     require(EnsureDirectoryForTest(JoinPath(JoinPath(JoinPath(skipGameRoot, "bin"), "Final"), "mods")), "create skip game mods dir");
     require(WriteFileText(JoinPath(JoinPath(JoinPath(JoinPath(skipGameRoot, "bin"), "Final"), "mods"), "Existing.dll"), "old dll"), "write old dll");
@@ -314,6 +355,62 @@ bool RunSelfTests()
     std::string skippedText;
     require(ReadFileText(JoinPath(JoinPath(gameRoot, "data"), "Scripts\\foo.bin"), &skippedText) && skippedText == "changed later", "skipped changed data");
     require(!deleteResult.skippedRelativePaths.empty(), "reported skipped changed file");
+
+    const std::string weatherGameRoot = JoinPath(testRoot, "weather_stack_game");
+    const std::string winterPackageRoot = JoinPath(testRoot, "winter_package");
+    const std::string defogPackageRoot = JoinPath(testRoot, "defog_package");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(weatherGameRoot, "data"), "Scripts")), "create weather game scripts dir");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(winterPackageRoot, "data"), "Scripts")), "create winter scripts dir");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(defogPackageRoot, "data"), "Scripts")), "create defog scripts dir");
+    require(WriteFileText(JoinPath(JoinPath(weatherGameRoot, "data"), "Scripts\\weather.bin"), "vanilla weather"), "write vanilla weather");
+    require(WriteFileText(JoinPath(JoinPath(winterPackageRoot, "data"), "Scripts\\weather.bin"), "winter weather"), "write winter weather");
+    require(WriteFileText(JoinPath(JoinPath(defogPackageRoot, "data"), "Scripts\\weather.bin"), "defog weather"), "write defog weather");
+    require(EnumeratePackageFiles(winterPackageRoot, &packageFiles, &error), "enumerate winter package");
+    require(InstallModPackageFiles(packageFiles, weatherGameRoot, "winter_in_gorkhonsk", &installResult, &error), "install winter package");
+    require(EnumeratePackageFiles(defogPackageRoot, &packageFiles, &error), "enumerate defog package");
+    require(InstallModPackageFiles(packageFiles, weatherGameRoot, "defog", &installResult, &error), "install defog package");
+    require(ReadFileText(JoinPath(JoinPath(weatherGameRoot, "data"), "Scripts\\weather.bin"), &restoredText) && restoredText == "defog weather", "defog weather installed");
+    const std::vector<std::string> protectedWeatherPaths = {JoinPath(JoinPath("data", "Scripts"), "weather.bin")};
+    require(DeleteInstalledModFiles(weatherGameRoot, "defog", false, &deleteResult, &error, protectedWeatherPaths), "delete defog package with winter protected path");
+    require(ReadFileText(JoinPath(JoinPath(weatherGameRoot, "data"), "Scripts\\weather.bin"), &restoredText) && restoredText == "winter weather", "defog delete restores winter weather");
+    require(deleteResult.restoredRelativePaths.size() == 1, "defog delete reports restored weather");
+
+    const std::string cleanupPackageRoot = JoinPath(testRoot, "cleanup_package");
+    const std::string cleanupGameRoot = JoinPath(testRoot, "cleanup_game");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(JoinPath(cleanupPackageRoot, "bin"), "Final"), "mods")), "create cleanup package mods dir");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(cleanupGameRoot, "data"), "UI")), "create cleanup game ui dir");
+    require(WriteFileText(JoinPath(JoinPath(JoinPath(JoinPath(cleanupPackageRoot, "bin"), "Final"), "mods"), "Cleanup.dll"), "dll"), "write cleanup dll");
+    require(WriteFileText(JoinPath(JoinPath(cleanupGameRoot, "data"), "UI\\playerstat_base.xml"), "vanilla ui"), "write cleanup vanilla target");
+    require(EnumeratePackageFiles(cleanupPackageRoot, &packageFiles, &error), "enumerate cleanup package");
+    const std::vector<std::string> cleanupPaths = {JoinPath(JoinPath("data", "UI"), "playerstat_base.xml")};
+    PackageInstallResult cleanupInstallResult;
+    require(InstallModPackageFiles(packageFiles, cleanupGameRoot, "Cleanup", &cleanupInstallResult, &error, {}, cleanupPaths), "install package with cleanup restore");
+    std::vector<InstallManifestEntryInfo> cleanupEntries;
+    require(ReadInstallManifestEntriesInfo(cleanupGameRoot, "Cleanup", &cleanupEntries), "read cleanup manifest");
+    bool foundCleanupRestore = false;
+    for (const InstallManifestEntryInfo& cleanupEntry : cleanupEntries) {
+        foundCleanupRestore = foundCleanupRestore || cleanupEntry.action == ManifestInstallAction::CleanupRestore;
+    }
+    require(foundCleanupRestore, "cleanup restore entry recorded");
+    require(WriteFileText(JoinPath(JoinPath(cleanupGameRoot, "data"), "UI\\playerstat_base.xml"), "dynamic changed ui"), "change cleanup target");
+    require(DeleteInstalledModFiles(cleanupGameRoot, "Cleanup", true, &deleteResult, &error), "delete cleanup restore package");
+    require(ReadFileText(JoinPath(JoinPath(cleanupGameRoot, "data"), "UI\\playerstat_base.xml"), &restoredText) && restoredText == "vanilla ui", "cleanup restore restores original");
+
+    const std::string generatedCleanupRoot = JoinPath(testRoot, "generated_cleanup_game");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(generatedCleanupRoot, "data"), "UI")), "create generated cleanup game ui dir");
+    require(InstallModPackageFiles(packageFiles, generatedCleanupRoot, "GeneratedCleanup", &cleanupInstallResult, &error, {}, cleanupPaths), "install package with cleanup delete");
+    require(ReadInstallManifestEntriesInfo(generatedCleanupRoot, "GeneratedCleanup", &cleanupEntries), "read generated cleanup manifest");
+    bool foundCleanupDelete = false;
+    for (const InstallManifestEntryInfo& cleanupEntry : cleanupEntries) {
+        foundCleanupDelete = foundCleanupDelete || cleanupEntry.action == ManifestInstallAction::CleanupDelete;
+    }
+    require(foundCleanupDelete, "cleanup delete entry recorded");
+    require(WriteFileText(JoinPath(JoinPath(generatedCleanupRoot, "data"), "UI\\playerstat_base.xml"), "generated ui"), "write generated cleanup target");
+    require(DeleteInstalledModFiles(generatedCleanupRoot, "GeneratedCleanup", true, &deleteResult, &error), "delete cleanup generated package");
+    require(!FileExists(JoinPath(JoinPath(generatedCleanupRoot, "data"), "UI\\playerstat_base.xml").c_str()), "cleanup delete removes generated target");
+
+    const std::vector<std::string> unsafeCleanupPaths = {"..\\bad.xml"};
+    require(!InstallModPackageFiles(packageFiles, generatedCleanupRoot, "BadCleanup", &cleanupInstallResult, &error, {}, unsafeCleanupPaths), "reject unsafe cleanup path");
 
     require(WriteFileText(JoinPath(JoinPath(gameRoot, "data"), "Scripts\\vanilla.bin"), "do not delete"), "write legacy data");
     require(EnsureDirectoryForTest(JoinPath(JoinPath(JoinPath(gameRoot, "bin"), "Final"), "mods")), "create legacy mods dir");
