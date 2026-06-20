@@ -104,6 +104,65 @@ struct BackupsAuditPayload
     std::vector<ManifestAuditEntry> audit;
 };
 
+bool EqualsNoCaseLocal(const std::string& left, const std::string& right)
+{
+    return ::_stricmp(left.c_str(), right.c_str()) == 0;
+}
+
+bool ContainsNoCaseLocal(const std::vector<std::string>& values, const std::string& value)
+{
+    for (const std::string& candidate : values) {
+        if (EqualsNoCaseLocal(candidate, value)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string GetPackageDllRelativePath(const std::string& dllName)
+{
+    return NormalizeRelativePath(JoinPath(JoinPath(JoinPath("bin", "Final"), "mods"), dllName));
+}
+
+std::string GetPackageDllIniRelativePath(const std::string& dllName)
+{
+    return NormalizeRelativePath(JoinPath(JoinPath(JoinPath("bin", "Final"), "mods"), ReplaceExtension(dllName, ".ini")));
+}
+
+void AddDllOwnedPaths(std::vector<std::string>* paths, const std::string& dllName)
+{
+    if (!paths) {
+        return;
+    }
+
+    const std::string dllPath = GetPackageDllRelativePath(dllName);
+    const std::string iniPath = GetPackageDllIniRelativePath(dllName);
+    if (!ContainsNoCaseLocal(*paths, dllPath)) {
+        paths->push_back(dllPath);
+    }
+    if (!ContainsNoCaseLocal(*paths, iniPath)) {
+        paths->push_back(iniPath);
+    }
+}
+
+std::vector<ModConflictEntry> FilterIgnoredPackageConflicts(
+    const std::vector<ModConflictEntry>& conflicts,
+    const std::vector<std::string>& ignoredRelativePaths)
+{
+    if (ignoredRelativePaths.empty()) {
+        return conflicts;
+    }
+
+    std::vector<ModConflictEntry> filtered;
+    for (const ModConflictEntry& conflict : conflicts) {
+        const std::string normalizedPath = NormalizeRelativePath(conflict.relativePath);
+        if (!ContainsNoCaseLocal(ignoredRelativePaths, normalizedPath)) {
+            filtered.push_back(conflict);
+        }
+    }
+    return filtered;
+}
+
 std::string GetLauncherAssetDirectory()
 {
     return JoinPath(JoinPath(GetModuleDirectory(), "mods"), ".launcher");
@@ -847,8 +906,9 @@ void LauncherWindow::StartInstalledFilesLoading(const InstalledModView& view, bo
 
     const HWND targetWindow = window_;
     const LauncherConfig configSnapshot = config_;
-    std::thread([targetWindow, configSnapshot, view, requestId]() {
-        std::unique_ptr<InstalledFilesText> installedFiles(new InstalledFilesText(BuildInstalledFilesText(configSnapshot, view)));
+    const std::vector<ModConflictEntry> conflictSnapshot = conflictCache_;
+    std::thread([targetWindow, configSnapshot, conflictSnapshot, view, requestId]() {
+        std::unique_ptr<InstalledFilesText> installedFiles(new InstalledFilesText(BuildInstalledFilesText(configSnapshot, conflictSnapshot, view)));
         if (::PostMessageA(targetWindow, kInstalledFilesLoadedMessage, static_cast<WPARAM>(requestId), reinterpret_cast<LPARAM>(installedFiles.get())) != FALSE) {
             installedFiles.release();
         }
@@ -1111,7 +1171,24 @@ void LauncherWindow::ContinueInstallWithPackageFiles(
         }
     }
 
-    const std::vector<ModConflictEntry> packageConflicts = GetPackageConflicts(config_, files);
+    std::vector<std::string> ignoredConflictPaths;
+    for (const std::string& dllName : dllDecisions.skipDllNames) {
+        AddDllOwnedPaths(&ignoredConflictPaths, dllName);
+    }
+    for (const std::string& dllName : dllDecisions.keepSharedDllNames) {
+        AddDllOwnedPaths(&ignoredConflictPaths, dllName);
+    }
+    for (const std::string& selectedDllName : dllDecisions.selectedDllNames) {
+        for (const PackageDllInstallHint& hint : hints) {
+            if (EqualsNoCaseLocal(hint.dllName, selectedDllName) && hint.sharedDependency) {
+                AddDllOwnedPaths(&ignoredConflictPaths, selectedDllName);
+                break;
+            }
+        }
+    }
+
+    const std::vector<ModConflictEntry> packageConflicts =
+        FilterIgnoredPackageConflicts(GetPackageConflicts(config_, files), ignoredConflictPaths);
     if (!ConfirmPackageConflictsDialog(window_, packageConflicts)) {
         SetWindowTextString(statusLabel_, "Install cancelled because package conflicts were not accepted.");
         return;
@@ -1125,6 +1202,7 @@ void LauncherWindow::ContinueInstallWithPackageFiles(
     serviceOptions.selectedDllNames = dllDecisions.selectedDllNames;
     serviceOptions.overwriteDllNames = dllDecisions.overwriteDllNames;
     serviceOptions.skipDllNames = dllDecisions.skipDllNames;
+    serviceOptions.keepSharedDllNames = dllDecisions.keepSharedDllNames;
     StartPackageInstall(serviceOptions);
 }
 

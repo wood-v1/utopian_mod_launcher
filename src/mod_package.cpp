@@ -35,6 +35,9 @@ struct InstallManifestEntry
     std::string backupRelativePath;
 };
 
+bool ReadInstallManifestEntries(const std::string& gameRoot, const std::string& manifestOwner, std::vector<InstallManifestEntry>* entries);
+bool WriteInstallManifestEntries(const std::string& gameRoot, const std::string& manifestOwner, const std::vector<InstallManifestEntry>& entries, std::string* error);
+
 bool StartsWithNoCase(const std::string& value, const std::string& prefix)
 {
     return value.size() >= prefix.size()
@@ -69,6 +72,10 @@ bool DeleteFileIfExists(const std::string& path, std::string* error)
     }
 
     if (::DeleteFileA(path.c_str()) == FALSE) {
+        const DWORD lastError = ::GetLastError();
+        if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) {
+            return true;
+        }
         if (error) {
             *error = "Failed to delete " + path;
         }
@@ -76,6 +83,152 @@ bool DeleteFileIfExists(const std::string& path, std::string* error)
     }
 
     return true;
+}
+
+bool IsDirectoryEmpty(const std::string& path)
+{
+    WIN32_FIND_DATAA data = {};
+    const std::string pattern = JoinPath(path, "*");
+    HANDLE find = ::FindFirstFileA(pattern.c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    bool empty = true;
+    do {
+        if (std::strcmp(data.cFileName, ".") != 0 && std::strcmp(data.cFileName, "..") != 0) {
+            empty = false;
+            break;
+        }
+    } while (::FindNextFileA(find, &data) != FALSE);
+
+    ::FindClose(find);
+    return empty;
+}
+
+bool IsSamePathNoCase(const std::string& left, const std::string& right)
+{
+    return _stricmp(left.c_str(), right.c_str()) == 0;
+}
+
+bool IsSubPathNoCase(const std::string& path, const std::string& root)
+{
+    if (path.size() <= root.size()) {
+        return false;
+    }
+
+    if (_strnicmp(path.c_str(), root.c_str(), root.size()) != 0) {
+        return false;
+    }
+
+    const char separator = path[root.size()];
+    return separator == '\\' || separator == '/';
+}
+
+void PruneEmptyDataDirectoriesForPath(const std::string& gameRoot, const std::string& relativePath)
+{
+    const std::string normalized = NormalizeRelativePath(relativePath);
+    if (!StartsWithNoCase(normalized, "data\\")) {
+        return;
+    }
+
+    const std::string dataRoot = JoinPath(gameRoot, "data");
+    std::string directory = DirectoryName(JoinPath(gameRoot, normalized));
+    while (!directory.empty()
+        && !IsSamePathNoCase(directory, dataRoot)
+        && IsSubPathNoCase(directory, dataRoot)
+        && DirectoryExists(directory.c_str())
+        && IsDirectoryEmpty(directory)) {
+        if (::RemoveDirectoryA(directory.c_str()) == FALSE) {
+            break;
+        }
+        directory = DirectoryName(directory);
+    }
+}
+
+std::vector<std::string> ListInstallManifestOwners(const std::string& gameRoot)
+{
+    std::vector<std::string> owners;
+    const std::string manifestDirectory = GetManifestDirectory(gameRoot);
+    WIN32_FIND_DATAA data = {};
+    HANDLE find = ::FindFirstFileA(JoinPath(manifestDirectory, "*.install.txt").c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) {
+        return owners;
+    }
+
+    do {
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            continue;
+        }
+
+        const std::string fileName = data.cFileName;
+        const std::string suffix = ".install.txt";
+        if (fileName.size() <= suffix.size()
+            || _stricmp(fileName.c_str() + fileName.size() - suffix.size(), suffix.c_str()) != 0) {
+            continue;
+        }
+
+        owners.push_back(fileName.substr(0, fileName.size() - suffix.size()));
+    } while (::FindNextFileA(find, &data) != FALSE);
+
+    ::FindClose(find);
+    return owners;
+}
+
+bool CollapseOverwrittenLayer(
+    const std::string& gameRoot,
+    const std::string& deletedManifestOwner,
+    const InstallManifestEntry& deletedEntry,
+    std::string* error)
+{
+    const std::string relativePath = NormalizeRelativePath(deletedEntry.relativePath);
+    if (deletedEntry.installedSha256.empty()) {
+        return false;
+    }
+
+    bool collapsed = false;
+    for (const std::string& owner : ListInstallManifestOwners(gameRoot)) {
+        if (_stricmp(owner.c_str(), deletedManifestOwner.c_str()) == 0) {
+            continue;
+        }
+
+        std::vector<InstallManifestEntry> entries;
+        if (!ReadInstallManifestEntries(gameRoot, owner, &entries)) {
+            continue;
+        }
+
+        bool changed = false;
+        for (InstallManifestEntry& entry : entries) {
+            if (_stricmp(NormalizeRelativePath(entry.relativePath).c_str(), relativePath.c_str()) != 0) {
+                continue;
+            }
+            if (entry.action != InstallAction::Overwritten && entry.action != InstallAction::CleanupRestore) {
+                continue;
+            }
+            if (_stricmp(entry.beforeSha256.c_str(), deletedEntry.installedSha256.c_str()) != 0) {
+                continue;
+            }
+
+            if (deletedEntry.action == InstallAction::Created || deletedEntry.action == InstallAction::CleanupDelete) {
+                entry.action = InstallAction::Created;
+                entry.beforeSha256.clear();
+                entry.backupRelativePath.clear();
+            }
+            else {
+                entry.action = InstallAction::Overwritten;
+                entry.beforeSha256 = deletedEntry.beforeSha256;
+                entry.backupRelativePath = deletedEntry.backupRelativePath;
+            }
+            changed = true;
+            collapsed = true;
+        }
+
+        if (changed && !WriteInstallManifestEntries(gameRoot, owner, entries, error)) {
+            return false;
+        }
+    }
+
+    return collapsed;
 }
 
 bool MoveFileIfExists(const std::string& source, const std::string& target, std::string* error)
@@ -1131,6 +1284,9 @@ bool DeleteInstalledModFiles(
 
             const bool isProtectedByAnotherManifest = protectedPathKeys.find(ToLower(relativePath)) != protectedPathKeys.end();
             if (isProtectedByAnotherManifest && entry.action != InstallAction::Overwritten) {
+                if (CollapseOverwrittenLayer(gameRoot, manifestOwner, entry, error)) {
+                    continue;
+                }
                 if (result) {
                     result->skippedRelativePaths.push_back(relativePath);
                 }
@@ -1142,6 +1298,7 @@ bool DeleteInstalledModFiles(
                 if (FileExists(targetPath.c_str()) && !DeleteFileIfExists(targetPath, error)) {
                     return false;
                 }
+                PruneEmptyDataDirectoriesForPath(gameRoot, relativePath);
                 if (result) {
                     result->deletedRelativePaths.push_back(relativePath);
                 }
@@ -1179,6 +1336,9 @@ bool DeleteInstalledModFiles(
             }
 
             if (targetExists && !currentMatchesInstalled) {
+                if (isProtectedByAnotherManifest && CollapseOverwrittenLayer(gameRoot, manifestOwner, entry, error)) {
+                    continue;
+                }
                 if (result) {
                     result->skippedRelativePaths.push_back(relativePath);
                 }
@@ -1189,6 +1349,7 @@ bool DeleteInstalledModFiles(
                 if (targetExists && !DeleteFileIfExists(targetPath, error)) {
                     return false;
                 }
+                PruneEmptyDataDirectoriesForPath(gameRoot, relativePath);
                 if (result) {
                     result->deletedRelativePaths.push_back(relativePath);
                 }

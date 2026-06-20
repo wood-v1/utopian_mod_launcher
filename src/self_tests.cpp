@@ -409,6 +409,32 @@ bool RunSelfTests()
     require(DeleteInstalledModFiles(generatedCleanupRoot, "GeneratedCleanup", true, &deleteResult, &error), "delete cleanup generated package");
     require(!FileExists(JoinPath(JoinPath(generatedCleanupRoot, "data"), "UI\\playerstat_base.xml").c_str()), "cleanup delete removes generated target");
 
+    const std::string missingCreatedRoot = JoinPath(testRoot, "missing_created_game");
+    const std::string missingCreatedRelativePath = JoinPath(JoinPath("data", "Textures"), "terminitk_wall_02_DXT1.tex");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(missingCreatedRoot, "data"), "Textures")), "create missing created texture dir");
+    require(WriteInstallManifest(missingCreatedRoot, "MissingCreated", {missingCreatedRelativePath}, &error), "write missing created manifest");
+    require(DeleteInstalledModFiles(missingCreatedRoot, "MissingCreated", false, &deleteResult, &error), "delete missing created manifest file");
+    require(!DirectoryExists(JoinPath(JoinPath(missingCreatedRoot, "data"), "Textures").c_str()), "delete prunes empty data texture dir");
+
+    const std::string layeredRoot = JoinPath(testRoot, "layered_mods_game");
+    const std::string portraitsPackageRoot = JoinPath(testRoot, "portraits_package");
+    const std::string evaPackageRoot = JoinPath(testRoot, "eva_package");
+    const std::string katerinaRelativePath = JoinPath(JoinPath("data", "Textures"), "NPC_Katerina.png");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(portraitsPackageRoot, "data"), "Textures")), "create portraits texture package dir");
+    require(EnsureDirectoryForTest(JoinPath(JoinPath(evaPackageRoot, "data"), "Textures")), "create eva texture package dir");
+    require(WriteFileText(JoinPath(portraitsPackageRoot, katerinaRelativePath), "portraits katerina"), "write portraits katerina");
+    require(WriteFileText(JoinPath(evaPackageRoot, katerinaRelativePath), "eva katerina"), "write eva katerina");
+    require(EnumeratePackageFiles(portraitsPackageRoot, &packageFiles, &error), "enumerate portraits package");
+    require(InstallModPackageFiles(packageFiles, layeredRoot, "Pathologic 2 Portraits", &installResult, &error), "install portraits package");
+    require(EnumeratePackageFiles(evaPackageRoot, &packageFiles, &error), "enumerate eva package");
+    require(InstallModPackageFiles(packageFiles, layeredRoot, "Eva_Green", &installResult, &error), "install eva package");
+    require(ReadFileText(JoinPath(layeredRoot, katerinaRelativePath), &restoredText) && restoredText == "eva katerina", "eva overwrites portraits katerina");
+    require(DeleteInstalledModFiles(layeredRoot, "Pathologic 2 Portraits", false, &deleteResult, &error, {katerinaRelativePath}), "delete lower portraits under eva");
+    require(ReadFileText(JoinPath(layeredRoot, katerinaRelativePath), &restoredText) && restoredText == "eva katerina", "eva katerina remains after lower delete");
+    require(DeleteInstalledModFiles(layeredRoot, "Eva_Green", false, &deleteResult, &error), "delete eva after lower package");
+    require(!FileExists(JoinPath(layeredRoot, katerinaRelativePath).c_str()), "layered delete does not resurrect lower portrait file");
+    require(!DirectoryExists(JoinPath(JoinPath(layeredRoot, "data"), "Textures").c_str()), "layered delete prunes empty textures dir");
+
     const std::vector<std::string> unsafeCleanupPaths = {"..\\bad.xml"};
     require(!InstallModPackageFiles(packageFiles, generatedCleanupRoot, "BadCleanup", &cleanupInstallResult, &error, {}, unsafeCleanupPaths), "reject unsafe cleanup path");
 

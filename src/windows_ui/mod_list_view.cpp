@@ -151,6 +151,37 @@ std::string BuildDllRelationshipStatus(const LauncherConfig& config, const ModEn
 
     return "Primary DLL of package " + GetPackageName(*package) + ". Dependencies: " + JoinNames(GetPackageDependencyDlls(*package)) + ".";
 }
+
+std::string BuildConflictDetails(const LauncherConfig& config, const std::vector<ModConflictEntry>& conflicts, const InstalledModView& view)
+{
+    const ModMatch match{view.type, view.index};
+    const std::string owner = GetModManifestOwner(config, match);
+
+    std::ostringstream text;
+    bool wroteHeader = false;
+    std::set<std::string> seen;
+    for (const ModConflictEntry& conflict : conflicts) {
+        if (!EqualsNoCase(conflict.owner, owner)) {
+            continue;
+        }
+
+        const std::string normalizedPath = ToForwardSlashes(conflict.relativePath);
+        const std::string key = ToLower(normalizedPath + "\n" + conflict.otherModName);
+        if (seen.find(key) != seen.end()) {
+            continue;
+        }
+        seen.insert(key);
+
+        if (!wroteHeader) {
+            text << "\r\nConflicts:\r\n";
+            wroteHeader = true;
+        }
+        text << normalizedPath << "\r\n";
+        text << "  with: " << conflict.otherModName << "\r\n";
+    }
+
+    return text.str();
+}
 }
 
 void AddModListColumns(HWND modList)
@@ -262,10 +293,15 @@ std::string BuildModRelationshipStatus(const LauncherConfig& config, const Insta
     return BuildDllRelationshipStatus(config, config.mods[view.index], view.type);
 }
 
-std::string BuildModRelationshipDetails(const LauncherConfig& config, const InstalledModView& view)
+std::string BuildModRelationshipDetails(const LauncherConfig& config, const std::vector<ModConflictEntry>& conflicts, const InstalledModView& view)
 {
     std::ostringstream text;
     text << BuildModRelationshipStatus(config, view) << "\r\n";
+
+    const std::string conflictDetails = BuildConflictDetails(config, conflicts, view);
+    if (!conflictDetails.empty()) {
+        text << conflictDetails;
+    }
 
     const std::string description = GetDescriptionForView(config, view);
     if (!Trim(description).empty()) {
@@ -312,14 +348,19 @@ std::string BuildModRelationshipDetails(const LauncherConfig& config, const Inst
     return text.str();
 }
 
-InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const InstalledModView& view)
+InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const std::vector<ModConflictEntry>& conflicts, const InstalledModView& view)
 {
     const ModMatch match{view.type, view.index};
     const std::string owner = GetModManifestOwner(config, match);
     const std::string modName = GetModDisplayName(config, match);
     std::vector<InstallManifestEntryInfo> entries;
     if (!ReadInstallManifestEntriesInfo(GetDefaultGameRootDirectory(), owner, &entries) || entries.empty()) {
-        return {BuildModRelationshipDetails(config, view) + "\r\nNo install manifest found for " + modName + ".", "No installed file list is available for " + modName + ".", false};
+        const std::string conflictSummary = GetModConflictSummary(config, conflicts, view);
+        const std::string status = "No installed file list is available for " + modName + ".";
+        return {
+            BuildModRelationshipDetails(config, conflicts, view) + "\r\nNo install manifest found for " + modName + ".",
+            conflictSummary.empty() ? status : status + " " + conflictSummary,
+            false};
     }
 
     std::sort(entries.begin(), entries.end(), [](const InstallManifestEntryInfo& left, const InstallManifestEntryInfo& right) {
@@ -327,7 +368,7 @@ InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const I
     });
 
     std::ostringstream text;
-    text << BuildModRelationshipDetails(config, view) << "\r\nInstalled files:\r\n";
+    text << BuildModRelationshipDetails(config, conflicts, view) << "\r\nInstalled files:\r\n";
     uint32_t installedFileCount = 0;
     for (const InstallManifestEntryInfo& entry : entries) {
         if (entry.action == ManifestInstallAction::CleanupDelete || entry.action == ManifestInstallAction::CleanupRestore) {
@@ -337,9 +378,16 @@ InstalledFilesText BuildInstalledFilesText(const LauncherConfig& config, const I
         ++installedFileCount;
     }
 
+    const std::string conflictSummary = GetModConflictSummary(config, conflicts, view);
+    std::string status = "Showing " + Uint32ToString(installedFileCount) + " installed file(s) for " + modName + ".";
+    if (!conflictSummary.empty()) {
+        status += " ";
+        status += conflictSummary;
+    }
+
     return {
         text.str(),
-        "Showing " + Uint32ToString(installedFileCount) + " installed file(s) for " + modName + ".",
+        status,
         true};
 }
 }

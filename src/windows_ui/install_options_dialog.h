@@ -47,6 +47,7 @@ struct DllInstallDecisions
     std::vector<std::string> selectedDllNames;
     std::vector<std::string> overwriteDllNames;
     std::vector<std::string> skipDllNames;
+    std::vector<std::string> keepSharedDllNames;
 };
 
 bool PromptDllInstallDecisions(

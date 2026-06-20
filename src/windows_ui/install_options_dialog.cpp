@@ -341,6 +341,9 @@ private:
                 if (overwrite_[i]) {
                     decisions_.overwriteDllNames.push_back(hints_[i].dllName);
                 }
+                else if (hints_[i].sharedDependency) {
+                    decisions_.keepSharedDllNames.push_back(hints_[i].dllName);
+                }
                 else {
                     decisions_.skipDllNames.push_back(hints_[i].dllName);
                 }
