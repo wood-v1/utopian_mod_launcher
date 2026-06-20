@@ -10,9 +10,41 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <string>
 
 namespace uml
 {
+namespace
+{
+std::string GetOverlayModName(const ModEntry& mod)
+{
+    if (!mod.name.empty()) {
+        return mod.name;
+    }
+    if (!mod.dllName.empty()) {
+        return mod.dllName;
+    }
+    return FileNamePart(mod.dllPath);
+}
+
+void UpdateOverlayProgress(
+    const std::string& statusPath,
+    const std::string& current,
+    uint32_t completedCount,
+    uint32_t totalCount,
+    bool finished = false,
+    bool failed = false)
+{
+    LaunchOverlayProgress progress;
+    progress.current = current;
+    progress.completedCount = completedCount;
+    progress.totalCount = totalCount;
+    progress.finished = finished;
+    progress.failed = failed;
+    WriteLaunchOverlayProgress(statusPath, progress);
+}
+}
+
 bool ValidateLauncherConfig(const LauncherConfig& config, std::string* error)
 {
     const std::string resolvedGamePath = ResolveLauncherPath(config.gamePath);
@@ -114,11 +146,24 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
         return false;
     }
 
+    const uint32_t totalDllMods = static_cast<uint32_t>(config.mods.size());
+    const std::string overlayStatusPath = GetLaunchOverlayStatusPath(static_cast<uint32_t>(processInfo.dwProcessId));
+    DeleteLaunchOverlayStatus(overlayStatusPath);
+
+    LaunchOverlayInfo overlayInfo;
+    overlayInfo.version = kLauncherVersion;
+    overlayInfo.dllModCount = totalDllMods;
+    overlayInfo.resourceModCount = static_cast<uint32_t>(config.resourceMods.size());
+    UpdateOverlayProgress(overlayStatusPath, "Starting game...", 0, totalDllMods);
+    ShowLaunchOverlayForProcess(static_cast<uint32_t>(processInfo.dwProcessId), overlayInfo, overlayStatusPath);
+
     bool ok = true;
     bool processResumed = false;
     InjectionStage reachedStage = InjectionStage::Suspended;
+    uint32_t completedDllMods = 0;
 
     for (const ModEntry& mod : config.mods) {
+        const std::string modName = GetOverlayModName(mod);
         if (static_cast<int>(mod.stage) < static_cast<int>(reachedStage)) {
             std::printf(
                 "LoadOrder cannot move backwards: %s requests %s after reaching %s\n",
@@ -130,6 +175,7 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
         }
 
         if (!processResumed && mod.stage != InjectionStage::Suspended) {
+            UpdateOverlayProgress(overlayStatusPath, "Starting game process...", completedDllMods, totalDllMods);
             ::ResumeThread(processInfo.hThread);
             processResumed = true;
             reachedStage = InjectionStage::Resume;
@@ -139,6 +185,11 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
             && reachedStage != InjectionStage::Ui
             && (mod.stage == InjectionStage::Engine || mod.stage == InjectionStage::Ui)) {
             const std::string moduleName = FileNamePart(config.engineWait.moduleName);
+            UpdateOverlayProgress(
+                overlayStatusPath,
+                "Waiting for " + moduleName + " before " + modName,
+                completedDllMods,
+                totalDllMods);
             std::printf("Waiting for %s before injecting %s\n", moduleName.c_str(), mod.dllPath.c_str());
             ok = WaitForRemoteModule(
                 processInfo.hProcess,
@@ -152,6 +203,11 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
 
         if (ok && reachedStage != InjectionStage::Ui && mod.stage == InjectionStage::Ui) {
             const std::string moduleName = FileNamePart(config.uiWait.moduleName);
+            UpdateOverlayProgress(
+                overlayStatusPath,
+                "Waiting for " + moduleName + " before " + modName,
+                completedDllMods,
+                totalDllMods);
             std::printf("Waiting for %s before injecting %s\n", moduleName.c_str(), mod.dllPath.c_str());
             ok = WaitForRemoteModule(
                 processInfo.hProcess,
@@ -164,6 +220,11 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
         }
 
         if (ok && mod.delayMs != 0) {
+            UpdateOverlayProgress(
+                overlayStatusPath,
+                "Waiting " + std::to_string(mod.delayMs) + " ms before " + modName,
+                completedDllMods,
+                totalDllMods);
             std::printf(
                 "Waiting %lu ms before injecting %s\n",
                 static_cast<unsigned long>(mod.delayMs),
@@ -172,24 +233,39 @@ bool LaunchGame(const LauncherConfig& config, std::string* error)
         }
 
         if (ok) {
+            UpdateOverlayProgress(overlayStatusPath, "Injecting " + modName, completedDllMods, totalDllMods);
             std::printf("Injecting %s\n", mod.dllPath.c_str());
             ok = InjectDll(processInfo.hProcess, mod.dllPath.c_str());
+            if (ok) {
+                ++completedDllMods;
+                UpdateOverlayProgress(overlayStatusPath, "Loaded " + modName, completedDllMods, totalDllMods);
+            }
         }
     }
 
     if (ok && !processResumed) {
+        UpdateOverlayProgress(overlayStatusPath, "Starting game process...", completedDllMods, totalDllMods);
         ::ResumeThread(processInfo.hThread);
     }
 
     if (ok) {
-        LaunchOverlayInfo overlayInfo;
-        overlayInfo.version = kLauncherVersion;
-        overlayInfo.dllModCount = static_cast<uint32_t>(config.mods.size());
-        overlayInfo.resourceModCount = static_cast<uint32_t>(config.resourceMods.size());
-        ShowLaunchOverlayForProcess(static_cast<uint32_t>(processInfo.dwProcessId), overlayInfo);
+        UpdateOverlayProgress(
+            overlayStatusPath,
+            "Launch complete",
+            completedDllMods,
+            totalDllMods,
+            true,
+            false);
     }
 
     if (!ok) {
+        UpdateOverlayProgress(
+            overlayStatusPath,
+            "Launch failed",
+            completedDllMods,
+            totalDllMods,
+            true,
+            true);
         ::TerminateProcess(processInfo.hProcess, 1);
         if (error) {
             *error = "Launch failed. See console output for details.";

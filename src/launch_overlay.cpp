@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
+#include <map>
 #include <string>
 #include <utility>
 
@@ -14,10 +16,10 @@ namespace
 constexpr const char* kOverlayClassName = "UtopianLaunchOverlayWindow";
 constexpr UINT_PTR kOverlayTimerId = 1;
 constexpr UINT kOverlayTickMs = 250;
-constexpr DWORD kFindWindowTimeoutMs = 10000;
+constexpr DWORD kWaitingOverlayMs = 120000;
 constexpr DWORD kVisibleOverlayMs = 10000;
-constexpr int kOverlayWidth = 380;
-constexpr int kOverlayHeight = 92;
+constexpr int kOverlayWidth = 440;
+constexpr int kOverlayHeight = 122;
 constexpr int kOverlayMargin = 18;
 
 struct OverlayState
@@ -25,8 +27,13 @@ struct OverlayState
     uint32_t processId = 0;
     HWND gameWindow = nullptr;
     LaunchOverlayInfo info;
+    LaunchOverlayProgress progress;
+    std::string statusPath;
+    DWORD startedAt = 0;
     DWORD expiresAt = 0;
+    bool finalCountdownStarted = false;
     HFONT font = nullptr;
+    HFONT titleFont = nullptr;
 };
 
 struct WindowSearch
@@ -65,34 +72,119 @@ HWND FindMainWindow(uint32_t processId)
     return search.window;
 }
 
-HWND WaitForMainWindow(uint32_t processId)
+std::string SanitizeStatusValue(const std::string& value)
 {
-    const DWORD startedAt = ::GetTickCount();
-    while (::GetTickCount() - startedAt < kFindWindowTimeoutMs) {
-        HWND window = FindMainWindow(processId);
-        if (window != nullptr) {
-            return window;
+    std::string sanitized;
+    sanitized.reserve(value.size());
+    for (char ch : value) {
+        if (ch == '\r' || ch == '\n') {
+            sanitized.push_back(' ');
         }
-        ::Sleep(250);
+        else {
+            sanitized.push_back(ch);
+        }
     }
-    return nullptr;
+    return sanitized;
+}
+
+std::map<std::string, std::string> ReadStatusFile(const std::string& path)
+{
+    std::map<std::string, std::string> values;
+    std::ifstream input(path);
+    std::string line;
+    while (std::getline(input, line)) {
+        const std::size_t separator = line.find('=');
+        if (separator == std::string::npos) {
+            continue;
+        }
+        values[line.substr(0, separator)] = line.substr(separator + 1);
+    }
+    return values;
+}
+
+uint32_t ParseUInt(const std::map<std::string, std::string>& values, const char* key, uint32_t fallback)
+{
+    const auto found = values.find(key);
+    if (found == values.end()) {
+        return fallback;
+    }
+    return static_cast<uint32_t>(std::strtoul(found->second.c_str(), nullptr, 10));
+}
+
+bool ParseBool(const std::map<std::string, std::string>& values, const char* key, bool fallback)
+{
+    const auto found = values.find(key);
+    if (found == values.end()) {
+        return fallback;
+    }
+    return found->second == "1";
+}
+
+void RefreshProgress(OverlayState* state)
+{
+    if (state == nullptr || state->statusPath.empty()) {
+        return;
+    }
+
+    const std::map<std::string, std::string> values = ReadStatusFile(state->statusPath);
+    if (values.empty()) {
+        return;
+    }
+
+    const auto current = values.find("current");
+    if (current != values.end()) {
+        state->progress.current = current->second;
+    }
+    state->progress.completedCount = ParseUInt(values, "completed", state->progress.completedCount);
+    state->progress.totalCount = ParseUInt(values, "total", state->progress.totalCount);
+    state->progress.finished = ParseBool(values, "finished", state->progress.finished);
+    state->progress.failed = ParseBool(values, "failed", state->progress.failed);
+
+    if ((state->progress.finished || state->progress.failed) && !state->finalCountdownStarted) {
+        state->expiresAt = ::GetTickCount() + kVisibleOverlayMs;
+        state->finalCountdownStarted = true;
+    }
 }
 
 void UpdateOverlayPosition(HWND overlay, HWND gameWindow)
 {
     RECT gameRect = {};
-    if (!::IsWindow(gameWindow) || !::GetWindowRect(gameWindow, &gameRect)) {
+    if (::IsWindow(gameWindow) && ::GetWindowRect(gameWindow, &gameRect)) {
+        ::SetWindowPos(
+            overlay,
+            HWND_TOPMOST,
+            gameRect.left + kOverlayMargin,
+            gameRect.top + kOverlayMargin,
+            kOverlayWidth,
+            kOverlayHeight,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW);
         return;
     }
 
+    RECT workArea = {};
+    if (!::SystemParametersInfoA(SPI_GETWORKAREA, 0, &workArea, 0)) {
+        workArea.left = 0;
+        workArea.top = 0;
+    }
     ::SetWindowPos(
         overlay,
         HWND_TOPMOST,
-        gameRect.left + kOverlayMargin,
-        gameRect.top + kOverlayMargin,
+        workArea.left + kOverlayMargin,
+        workArea.top + kOverlayMargin,
         kOverlayWidth,
         kOverlayHeight,
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+void DrawTextLine(HDC dc, const std::string& text, int left, int top, int right)
+{
+    RECT textRect = {left, top, right, top + 24};
+    ::DrawTextA(
+        dc,
+        text.c_str(),
+        static_cast<int>(text.size()),
+        &textRect,
+        DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 void DrawOverlay(HWND window, OverlayState* state)
@@ -114,20 +206,43 @@ void DrawOverlay(HWND window, OverlayState* state)
     ::SelectObject(dc, oldPen);
     ::DeleteObject(border);
 
+    ::SetBkMode(dc, TRANSPARENT);
+    ::SetTextColor(dc, RGB(248, 230, 205));
+
+    if (state->titleFont != nullptr) {
+        ::SelectObject(dc, state->titleFont);
+    }
+
+    const std::string title = state->progress.failed
+        ? "Utopian Launcher: launch failed"
+        : (state->progress.finished ? "Launched with Utopian Launcher " + state->info.version : "Utopian Launcher is loading mods");
+    DrawTextLine(dc, title, 16, 12, rect.right - 16);
+
     if (state->font != nullptr) {
         ::SelectObject(dc, state->font);
     }
 
-    ::SetBkMode(dc, TRANSPARENT);
-    ::SetTextColor(dc, RGB(248, 230, 205));
-
-    const std::string title = "Launched with Utopian Launcher " + state->info.version;
-    const std::string dllMods = "Installed " + std::to_string(state->info.dllModCount) + " DLL Mods";
-    const std::string resourceMods = "Installed " + std::to_string(state->info.resourceModCount) + " Resource Mods";
-
-    ::TextOutA(dc, 16, 14, title.c_str(), static_cast<int>(title.size()));
-    ::TextOutA(dc, 16, 38, dllMods.c_str(), static_cast<int>(dllMods.size()));
-    ::TextOutA(dc, 16, 62, resourceMods.c_str(), static_cast<int>(resourceMods.size()));
+    if (state->progress.finished && !state->progress.failed) {
+        const std::string dllMods = "Installed " + std::to_string(state->info.dllModCount) + " DLL Mods";
+        const std::string resourceMods = "Installed " + std::to_string(state->info.resourceModCount) + " Resource Mods";
+        DrawTextLine(dc, dllMods, 16, 44, rect.right - 16);
+        DrawTextLine(dc, resourceMods, 16, 72, rect.right - 16);
+    }
+    else {
+        const uint32_t remaining = state->progress.totalCount > state->progress.completedCount
+            ? state->progress.totalCount - state->progress.completedCount
+            : 0;
+        const std::string progress = "DLL mods: "
+            + std::to_string(state->progress.completedCount)
+            + "/"
+            + std::to_string(state->progress.totalCount)
+            + " loaded, "
+            + std::to_string(remaining)
+            + " remaining";
+        const std::string current = state->progress.current.empty() ? "Starting game..." : state->progress.current;
+        DrawTextLine(dc, progress, 16, 44, rect.right - 16);
+        DrawTextLine(dc, current, 16, 72, rect.right - 16);
+    }
 
     ::EndPaint(window, &paint);
 }
@@ -146,8 +261,23 @@ LRESULT CALLBACK OverlayWindowProc(HWND window, UINT message, WPARAM wParam, LPA
     }
     case WM_CREATE:
         if (state != nullptr) {
+            state->titleFont = ::CreateFontA(
+                19,
+                0,
+                0,
+                0,
+                FW_SEMIBOLD,
+                FALSE,
+                FALSE,
+                FALSE,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_SWISS,
+                "Segoe UI");
             state->font = ::CreateFontA(
-                16,
+                18,
                 0,
                 0,
                 0,
@@ -165,12 +295,28 @@ LRESULT CALLBACK OverlayWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         }
         return 0;
     case WM_TIMER:
-        if (state == nullptr || !::IsWindow(state->gameWindow) || ::GetTickCount() >= state->expiresAt) {
+    {
+        if (state == nullptr) {
             ::DestroyWindow(window);
             return 0;
         }
+
+        RefreshProgress(state);
+        if (state->gameWindow == nullptr || !::IsWindow(state->gameWindow)) {
+            state->gameWindow = FindMainWindow(state->processId);
+        }
+
+        const DWORD now = ::GetTickCount();
+        if ((state->finalCountdownStarted && now >= state->expiresAt)
+            || (!state->finalCountdownStarted && now - state->startedAt >= kWaitingOverlayMs)) {
+            ::DestroyWindow(window);
+            return 0;
+        }
+
         UpdateOverlayPosition(window, state->gameWindow);
+        ::InvalidateRect(window, nullptr, FALSE);
         return 0;
+    }
     case WM_NCHITTEST:
         return HTTRANSPARENT;
     case WM_PAINT:
@@ -183,6 +329,10 @@ LRESULT CALLBACK OverlayWindowProc(HWND window, UINT message, WPARAM wParam, LPA
         if (state != nullptr && state->font != nullptr) {
             ::DeleteObject(state->font);
             state->font = nullptr;
+        }
+        if (state != nullptr && state->titleFont != nullptr) {
+            ::DeleteObject(state->titleFont);
+            state->titleFont = nullptr;
         }
         ::SetWindowLongPtrA(window, GWLP_USERDATA, 0);
         ::PostQuitMessage(0);
@@ -222,16 +372,8 @@ std::string QuoteCommandArgument(const std::string& value)
     return quoted;
 }
 
-int RunOverlayWindow(uint32_t processId, LaunchOverlayInfo info)
+int RunOverlayWindow(uint32_t processId, LaunchOverlayInfo info, const std::string& statusPath)
 {
-    HWND gameWindow = WaitForMainWindow(processId);
-    if (gameWindow == nullptr) {
-        return 0;
-    }
-
-    // Give the freshly-created game window a moment to finish its first paint.
-    ::Sleep(1500);
-
     HINSTANCE instance = ::GetModuleHandleA(nullptr);
     if (!RegisterOverlayClass(instance)) {
         return 1;
@@ -239,9 +381,13 @@ int RunOverlayWindow(uint32_t processId, LaunchOverlayInfo info)
 
     OverlayState state;
     state.processId = processId;
-    state.gameWindow = gameWindow;
+    state.gameWindow = FindMainWindow(processId);
     state.info = std::move(info);
-    state.expiresAt = ::GetTickCount() + kVisibleOverlayMs;
+    state.statusPath = statusPath;
+    state.progress.totalCount = state.info.dllModCount;
+    state.startedAt = ::GetTickCount();
+    state.expiresAt = state.startedAt + kWaitingOverlayMs;
+    RefreshProgress(&state);
 
     HWND overlay = ::CreateWindowExA(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
@@ -261,7 +407,7 @@ int RunOverlayWindow(uint32_t processId, LaunchOverlayInfo info)
     }
 
     ::SetLayeredWindowAttributes(overlay, 0, 226, LWA_ALPHA);
-    UpdateOverlayPosition(overlay, gameWindow);
+    UpdateOverlayPosition(overlay, state.gameWindow);
     ::ShowWindow(overlay, SW_SHOWNOACTIVATE);
     ::UpdateWindow(overlay);
 
@@ -275,7 +421,47 @@ int RunOverlayWindow(uint32_t processId, LaunchOverlayInfo info)
 }
 }
 
-void ShowLaunchOverlayForProcess(uint32_t processId, LaunchOverlayInfo info)
+std::string GetLaunchOverlayStatusPath(uint32_t processId)
+{
+    char tempPath[MAX_PATH] = {};
+    const DWORD length = ::GetTempPathA(MAX_PATH, tempPath);
+    const std::string directory = length > 0 && length < MAX_PATH ? tempPath : ".\\";
+    return directory + "UtopianLaunchOverlay_" + std::to_string(processId) + ".status";
+}
+
+void WriteLaunchOverlayProgress(const std::string& statusPath, const LaunchOverlayProgress& progress)
+{
+    if (statusPath.empty()) {
+        return;
+    }
+
+    const std::string tempPath = statusPath + ".tmp";
+    {
+        std::ofstream output(tempPath, std::ios::trunc);
+        if (!output) {
+            return;
+        }
+        output << "current=" << SanitizeStatusValue(progress.current) << "\n";
+        output << "completed=" << progress.completedCount << "\n";
+        output << "total=" << progress.totalCount << "\n";
+        output << "finished=" << (progress.finished ? 1 : 0) << "\n";
+        output << "failed=" << (progress.failed ? 1 : 0) << "\n";
+    }
+
+    if (!::MoveFileExA(tempPath.c_str(), statusPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        ::DeleteFileA(tempPath.c_str());
+    }
+}
+
+void DeleteLaunchOverlayStatus(const std::string& statusPath)
+{
+    if (!statusPath.empty()) {
+        ::DeleteFileA(statusPath.c_str());
+        ::DeleteFileA((statusPath + ".tmp").c_str());
+    }
+}
+
+void ShowLaunchOverlayForProcess(uint32_t processId, LaunchOverlayInfo info, const std::string& statusPath)
 {
     char modulePath[MAX_PATH] = {};
     if (::GetModuleFileNameA(nullptr, modulePath, MAX_PATH) == 0) {
@@ -288,7 +474,9 @@ void ShowLaunchOverlayForProcess(uint32_t processId, LaunchOverlayInfo info)
         + " "
         + std::to_string(info.dllModCount)
         + " "
-        + std::to_string(info.resourceModCount);
+        + std::to_string(info.resourceModCount)
+        + " "
+        + QuoteCommandArgument(statusPath);
 
     STARTUPINFOA startupInfo = {};
     startupInfo.cb = sizeof(startupInfo);
@@ -311,8 +499,10 @@ void ShowLaunchOverlayForProcess(uint32_t processId, LaunchOverlayInfo info)
     ::CloseHandle(processInfo.hProcess);
 }
 
-int RunLaunchOverlayProcess(uint32_t processId, LaunchOverlayInfo info)
+int RunLaunchOverlayProcess(uint32_t processId, LaunchOverlayInfo info, const std::string& statusPath)
 {
-    return RunOverlayWindow(processId, std::move(info));
+    const int result = RunOverlayWindow(processId, std::move(info), statusPath);
+    DeleteLaunchOverlayStatus(statusPath);
+    return result;
 }
 }

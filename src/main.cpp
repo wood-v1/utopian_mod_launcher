@@ -211,12 +211,12 @@ void PrintUiConsoleBanner()
 
 int main(int argc, char** argv)
 {
-    if (argc == 5 && ::_stricmp(argv[1], "--launch-overlay") == 0) {
+    if (argc == 6 && ::_stricmp(argv[1], "--launch-overlay") == 0) {
         uml::LaunchOverlayInfo info;
         info.version = uml::kLauncherVersion;
         info.dllModCount = static_cast<uint32_t>(std::strtoul(argv[3], nullptr, 10));
         info.resourceModCount = static_cast<uint32_t>(std::strtoul(argv[4], nullptr, 10));
-        return uml::RunLaunchOverlayProcess(static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10)), info);
+        return uml::RunLaunchOverlayProcess(static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10)), info, argv[5]);
     }
 
     if (argc > 1 && ::_stricmp(argv[1], "--self-test") == 0) {
