@@ -222,6 +222,37 @@ bool RunSelfTests()
     require(packageDlls.size() == 2 && foundTestDll && foundDependencyDll, "detect package dlls");
 
     const std::string wrappedPackageRoot = JoinPath(testRoot, "wrapped_package");
+    const std::string geometryRoot = JoinPath(testRoot, "geometry_package");
+    require(EnsureDirectoryForTest(JoinPath(geometryRoot, "data\\Geometries")), "create geometry package");
+    require(WriteFileText(JoinPath(geometryRoot, "data\\Geometries\\victoria.mesh"), "mesh"), "write geometry");
+    require(WriteFileText(JoinPath(geometryRoot, "HOW_TO_INSTALL.txt"), "docs"), "write geometry docs");
+    require(WriteFileText(JoinPath(geometryRoot, "replace_mesh_data.py"), "helper"), "write geometry helper");
+    require(EnumeratePackageFiles(geometryRoot, &packageFiles, &error), "enumerate geometry package with Python helper");
+    require(packageFiles.size() == 1 && packageFiles[0].relativePath == "data\\Geometries\\victoria.mesh", "geometry helper excluded and path preserved");
+
+    const std::string proxyRoot = JoinPath(testRoot, "proxy_package");
+    const std::string proxyGame = JoinPath(testRoot, "proxy_game");
+    require(EnsureDirectoryForTest(JoinPath(proxyRoot, "bin\\Final")), "create proxy package");
+    require(EnsureDirectoryForTest(JoinPath(proxyRoot, "data\\Scripts")), "create proxy resources");
+    require(EnsureDirectoryForTest(JoinPath(proxyGame, "bin\\Final")), "create proxy game");
+    require(WriteFileText(JoinPath(proxyRoot, "data\\Scripts\\overhaul.bin"), "script"), "write proxy resource");
+    require(WriteFileText(JoinPath(proxyGame, "bin\\Final\\VFS.dll"), "original"), "write original proxy");
+    for (const char* name : { "DINPUT8.dll", "OpenAL32.dll", "VFS.dll", "VFS_original.dll" }) {
+        require(WriteFileText(JoinPath(JoinPath(proxyRoot, "bin\\Final"), name), "replacement"), "write proxy DLL");
+    }
+    require(EnumeratePackageFiles(proxyRoot, &packageFiles, &error) && packageFiles.size() == 5, "enumerate overhaul layout");
+    require(FindPackageDllNames(packageFiles).empty(), "proxy DLLs excluded from injection");
+    require(!IsAllowedPackageRelativePath("bin\\Final\\other\\test.dll"), "reject unsupported nested DLL");
+    require(!IsAllowedPackageRelativePath("bin\\Final\\..\\escape.dll"), "reject DLL traversal");
+    PackageInstallResult proxyInstall;
+    require(InstallModPackageFiles(packageFiles, proxyGame, "overhaul", &proxyInstall, &error), "install overhaul layout");
+    std::string proxyText;
+    require(ReadFileText(JoinPath(proxyGame, "bin\\Final\\VFS.dll"), &proxyText) && proxyText == "replacement", "proxy DLL overwritten");
+    ModDeleteResult proxyDelete;
+    require(DeleteInstalledModFiles(proxyGame, "overhaul", false, &proxyDelete, &error), "uninstall overhaul layout");
+    require(ReadFileText(JoinPath(proxyGame, "bin\\Final\\VFS.dll"), &proxyText) && proxyText == "original", "proxy DLL restored");
+    require(!FileExists(JoinPath(proxyGame, "bin\\Final\\DINPUT8.dll").c_str()), "created proxy DLL removed");
+
     const std::string wrappedInnerRoot = JoinPath(wrappedPackageRoot, "Neon Twyre");
     require(EnsureDirectoryForTest(JoinPath(JoinPath(wrappedInnerRoot, "data"), "Scripts")), "create wrapped package dir");
     require(WriteFileText(JoinPath(JoinPath(wrappedInnerRoot, "data"), "Scripts\\wrapped.bin"), "wrapped"), "write wrapped package data");

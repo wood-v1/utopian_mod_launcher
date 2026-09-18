@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10.0)
-project(UtopianModLauncher VERSION 1.0.0 LANGUAGES C CXX)
+project(UtopianModLauncher VERSION 1.1.0 LANGUAGES C CXX)
 
 set(LAUNCHER_ICON_ICO "${CMAKE_CURRENT_BINARY_DIR}/uicon.ico")
 set(LAUNCHER_RC "${CMAKE_CURRENT_BINARY_DIR}/launcher.rc")

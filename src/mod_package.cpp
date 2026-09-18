@@ -612,6 +612,7 @@ bool IsRootPackageMetadata(const std::string& relativePath)
     return HasExtensionNoCase(normalized, ".txt")
         || HasExtensionNoCase(normalized, ".md")
         || HasExtensionNoCase(normalized, ".ps1")
+        || HasExtensionNoCase(normalized, ".py")
         || HasExtensionNoCase(normalized, ".bat")
         || HasExtensionNoCase(normalized, ".cmd")
         || HasExtensionNoCase(normalized, ".zip")
@@ -833,7 +834,10 @@ bool IsAllowedPackageRelativePath(const std::string& relativePath)
 {
     const std::string normalized = NormalizeRelativePath(relativePath);
     return IsSafeRelativePath(normalized)
-        && (StartsWithNoCase(normalized, "bin\\Final\\mods\\") || StartsWithNoCase(normalized, "data\\"));
+        && (StartsWithNoCase(normalized, "bin\\Final\\mods\\") || StartsWithNoCase(normalized, "data\\")
+            || (StartsWithNoCase(normalized, "bin\\Final\\")
+                && normalized.find('\\', 10) == std::string::npos
+                && HasExtensionNoCase(normalized, ".dll")));
 }
 
 std::string SanitizeManifestOwner(const std::string& name)
@@ -907,7 +911,7 @@ bool EnumeratePackageFiles(const std::string& packageRoot, std::vector<PackageFi
 
     if (error) {
         *error = "Unsupported package path: " + invalidPath
-            + "\r\n\r\nPackages must contain files under bin\\Final\\mods or data. "
+            + "\r\n\r\nPackages must contain files under bin\\Final\\mods or data, or DLLs directly under bin\\Final. "
               "A single top-level wrapper folder is allowed.";
     }
     return false;

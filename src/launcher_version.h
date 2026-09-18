@@ -2,5 +2,5 @@
 
 namespace uml
 {
-constexpr const char* kLauncherVersion = "1.0";
+constexpr const char* kLauncherVersion = "1.1";
 }

@@ -1084,16 +1084,21 @@ void LauncherWindow::FinishPackageAnalysis(int requestId, void* payload)
 
     EndBusy();
     if (!result->ok) {
-        if (result->packageTargetRelativeDirectory.empty()) {
-        PackageTargetDialog targetDialog(
-            window_,
-            "Original validation:\r\n"
+        const bool hasGameRootPaths = std::any_of(result->files.begin(), result->files.end(), [](const PackageFile& file) {
+            const std::string path = NormalizeRelativePath(file.relativePath);
+            return _strnicmp(path.c_str(), "data\\", 5) == 0
+                || _strnicmp(path.c_str(), "bin\\", 4) == 0;
+        });
+        if (result->packageTargetRelativeDirectory.empty() && !result->files.empty() && !hasGameRootPaths) {
+            PackageTargetDialog targetDialog(
+                window_,
+                "Original validation:\r\n"
                     + (result->error.empty() ? std::string("unsupported layout") : result->error));
             std::string packageTargetRelativeDirectory;
-        if (!targetDialog.Show(&packageTargetRelativeDirectory)) {
-            SetWindowTextString(statusLabel_, "Install cancelled.");
-            return;
-        }
+            if (!targetDialog.Show(&packageTargetRelativeDirectory)) {
+                SetWindowTextString(statusLabel_, "Install cancelled.");
+                return;
+            }
 
             StartPackageAnalysis(result->packageRoot, result->defaultName, packageTargetRelativeDirectory);
         }

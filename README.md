@@ -2,7 +2,7 @@
 
 Runtime patching launcher for Pathologic Classic HD mods.
 
-Current version: `1.0`.
+Current version: `1.1`.
 
 Run `GameModLauncher.exe` to open the native launcher UI. The main screen is focused
 on mod load order, per-mod settings, logging, and launching the game. Use
@@ -11,7 +11,7 @@ on mod load order, per-mod settings, logging, and launching the game. Use
 
 ## Release bundle
 
-`release\UtopianModLauncher-1.0.zip` is laid out from the game root. To install
+`release\UtopianModLauncher-1.1.zip` is laid out from the game root. To install
 the launcher into a clean Pathologic Classic HD folder, unpack the zip into:
 
 ```text
@@ -145,6 +145,11 @@ data\Scripts\some_resource.bin
 data\Textures\some_texture.tex
 data\Sounds\some_sound.wav
 ```
+
+Packages may also include DLLs directly under `bin\Final` (for example,
+`DINPUT8.dll` or `VFS.dll`). These files retain their paths and are not added to
+the injected DLL load order. All subfolders under `data`, including
+`data\Geometries`, are supported. Root-level Python helper scripts are ignored.
 
 Release folders may also contain helper files at the package root. The launcher
 ignores root-level docs/scripts/archives and bundled launcher files such as
